@@ -104,7 +104,11 @@ infercnv_obj <- infercnv:::subtract_ref_expr_from_obs(
 )
 write_step(infercnv_obj, "step12_subtracted2")
 
-# --- Step 16: remove outliers (average_bound method) ---
+# --- Step 14: invert_log2 to linear FC (R run() order: 14 before 16) ---
+infercnv_obj <- infercnv:::invert_log2(infercnv_obj)
+write_step(infercnv_obj, "step14_invert")
+
+# --- Step 16: remove outliers in LINEAR FC space (matches R run() step_count order) ---
 infercnv_obj <- infercnv:::remove_outliers_norm(
     infercnv_obj,
     out_method = "average_bound",
@@ -112,9 +116,5 @@ infercnv_obj <- infercnv:::remove_outliers_norm(
     upper_bound = NA
 )
 write_step(infercnv_obj, "step16_outlier_pruned")
-
-# --- Final: invert_log2 back to linear FC ---
-infercnv_obj <- infercnv:::invert_log2(infercnv_obj)
-write_step(infercnv_obj, "step_invert")
 
 cat("[r_reference] SUCCESS — all TSVs written to", output_dir, "\n")

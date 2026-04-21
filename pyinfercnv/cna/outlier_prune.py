@@ -1,4 +1,7 @@
-"""Outlier pruning — R `remove_outliers_norm` (step 16) bit-exact.
+"""Outlier pruning — R `remove_outliers_norm` (step 16).
+
+Tier 4 approximate (empirical floor max_diff < 1e-4) — not bit-exact due to
+float32 accumulation in average_bounds reduction over 184 cells.
 
 R `_get_average_bounds` formula (`inferCNV_ops.R:2734`):
     lower_bound = mean over cells of min(cell)

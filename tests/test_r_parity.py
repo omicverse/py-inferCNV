@@ -241,30 +241,32 @@ def test_step11_center_cells_parity():
 # Step 16: prune_outliers (average_bound)
 # ============================================================================
 
-@pytest.mark.skipif(not _r_step_available("step16_outlier_pruned")
+@pytest.mark.skipif(not _r_step_available("step14_invert")
                     or not _r_step_available("step12_subtracted2"),
                     reason="r_out TSVs not available")
-def test_step16_outlier_prune_parity():
+def test_step14_invert_log2_parity():
+    """R run() step 14: invert_log2 on log-space subtracted2 -> linear FC."""
     r_step12, _, _ = _load_r_step("step12_subtracted2")
+    r_step14, _, _ = _load_r_step("step14_invert")
+    py_out = invert_log2(r_step12.T.astype(np.float32)).T
+    diff = max_abs_diff(py_out.astype(np.float64), r_step14)
+    assert diff < 1e-4, f"invert_log2 step14 max_diff={diff:.3e}"
+
+
+# ============================================================================
+# Step 16: prune_outliers in LINEAR FC space (R run() order: AFTER invert_log2)
+# ============================================================================
+
+@pytest.mark.skipif(not _r_step_available("step16_outlier_pruned")
+                    or not _r_step_available("step14_invert"),
+                    reason="r_out TSVs not available")
+def test_step16_outlier_prune_parity():
+    """G3 Q5 fix: outlier_prune operates on LINEAR FC (after step 14 invert)."""
+    r_step14, _, _ = _load_r_step("step14_invert")
     r_step16, _, _ = _load_r_step("step16_outlier_pruned")
-    py_out = prune_outliers(r_step12.T.astype(np.float32), method="average_bound").T
+    py_out = prune_outliers(r_step14.T.astype(np.float32), method="average_bound").T
     diff = max_abs_diff(py_out.astype(np.float64), r_step16)
     assert diff < 1e-4, f"outlier_prune step16 max_diff={diff:.3e}"
-
-
-# ============================================================================
-# step_invert: invert_log2 (linear FC space)
-# ============================================================================
-
-@pytest.mark.skipif(not _r_step_available("step_invert")
-                    or not _r_step_available("step16_outlier_pruned"),
-                    reason="r_out TSVs not available")
-def test_invert_log2_parity():
-    r_step16, _, _ = _load_r_step("step16_outlier_pruned")
-    r_invert, _, _ = _load_r_step("step_invert")
-    py_out = invert_log2(r_step16.T.astype(np.float32)).T
-    diff = max_abs_diff(py_out.astype(np.float64), r_invert)
-    assert diff < 1e-4, f"invert_log2 max_diff={diff:.3e}"
 
 
 # ============================================================================

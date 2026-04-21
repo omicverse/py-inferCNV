@@ -236,20 +236,18 @@ def infercnv(
     smoothed = subtract_reference(smoothed, ref_groups=ref_groups, use_bounds=cfg.ref_subtract_use_mean_bounds)
     _profile_block(profile, "11_subtract_ref_2", t0, rss)
 
-    # Step 14 — invert log2 -> linear FC
+    # Step 14 — invert log2 -> linear FC (R run() order: step 14 BEFORE step 16)
     t0 = time.perf_counter(); rss = _rss_mb()
     cnv_fc = invert_log2(smoothed)
     _profile_block(profile, "12_invert_log2", t0, rss)
 
-    # Step 16 — prune outliers (optional, controlled by config)
+    # Step 16 — prune outliers in LINEAR FC space (codex G3 Q5 fix).
+    # R's remove_outliers_norm is called AFTER invert_log2, so bounds are
+    # computed in linear FC space. We apply only to cnv_fc; the log-space
+    # `smoothed` is left untouched so the invariant cnv_fc == invert_log2(smoothed)
+    # holds up to the outlier clip applied on the linear side.
     if cfg.prune_outliers:
         t0 = time.perf_counter(); rss = _rss_mb()
-        smoothed = prune_outliers(
-            smoothed,
-            method=cfg.outlier_method_bound,
-            lower_bound=cfg.outlier_lower_bound,
-            upper_bound=cfg.outlier_upper_bound,
-        )
         cnv_fc = prune_outliers(
             cnv_fc,
             method=cfg.outlier_method_bound,
