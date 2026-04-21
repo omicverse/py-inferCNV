@@ -178,7 +178,8 @@ def test_hmmlearn_parity_optional():
     _, states_hmml = hm.decode(obs.reshape(-1, 1), algorithm="viterbi")
 
     ours = viterbi_decode_numpy(
-        obs, np.log(delta), np.log(trans), mus, sigmas
+        obs, np.log(delta), np.log(trans), mus, sigmas,
+        emission="gauss_std",  # hmmlearn uses standard Gaussian; R-style would diverge
     )
     agree = float(np.mean(ours == states_hmml))
     # Soft floor — hmmlearn's tie-break policy can differ at boundaries.

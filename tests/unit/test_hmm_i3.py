@@ -181,7 +181,8 @@ def test_hmmlearn_parity_optional_i3():
     _, states_hmml = hm.decode(obs.reshape(-1, 1), algorithm="viterbi")
 
     ours = viterbi_decode_numpy(
-        obs, np.log(delta / delta.sum()), np.log(trans / row_sum), mus, sigmas
+        obs, np.log(delta / delta.sum()), np.log(trans / row_sum), mus, sigmas,
+        emission="gauss_std",  # hmmlearn uses standard Gaussian; R-style would diverge
     )
     agree = float(np.mean(ours == states_hmml))
     assert agree >= 0.95, f"i3 hmmlearn agreement {agree:.3f}"
