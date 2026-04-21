@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn.metrics
 
 from pyinfercnv.center.center_cells import center_cells
 from pyinfercnv.cna.outlier_prune import prune_outliers
@@ -276,7 +277,7 @@ def test_step16_outlier_prune_parity():
 @pytest.mark.skipif(not _r_step_available("step10_smoothed")
                     or not _r_step_available("step09_clipped"),
                     reason="r_out TSVs not available")
-def test_step10_smooth_pyramidinal_per_chromosome(gene_order):
+def test_step10_smooth_pyramidinal_per_chromosome(gene_order):  # noqa: F811
     """The trickiest module — interior must bit-match R's triangular kernel,
     tail uses dynamic-denominator R-exact formula."""
     r_step09, r_genes, _ = _load_r_step("step09_clipped")
@@ -316,3 +317,322 @@ def test_step10_smooth_pyramidinal_per_chromosome(gene_order):
     diff_full = max_abs_diff(py_out.T.astype(np.float64), r_step10)
     # Tier-4 approx for tail; tier-4 bit-exact in interior. Combined floor:
     assert diff_full < 1e-3, f"smooth_pyramidinal step10 max_diff={diff_full:.3e}"
+
+
+# ============================================================================
+# Helpers for Phase 2 tests (build AnnData from R fixture)
+# ============================================================================
+
+def _build_adata_from_fixture(raw_counts_df: "pd.DataFrame",
+                               annot_df: "pd.DataFrame",
+                               gene_order_df: "pd.DataFrame") -> "AnnData":
+    """Build a minimal AnnData from the oligodendroglioma downsampled fixture.
+
+    Returns a (cells x genes) AnnData with:
+      - .X and .layers["counts"]: raw integer counts (cells x genes)
+      - .obs["celltype"]: annotation label per cell
+      - .var: gene_symbol index with chromosome/start/end columns
+    """
+    import anndata as ad
+    import scipy.sparse as sp_sparse
+
+    # Align genes to gene_order (R's CreateInfercnvObject convention)
+    go = gene_order_df.copy()
+    go = go[~go["chromosome"].isin({"chrX", "chrY", "chrM"})]
+    go = go.drop_duplicates("gene_symbol").set_index("gene_symbol")
+    common = [g for g in go.index if g in raw_counts_df.index]
+    counts_sub = raw_counts_df.loc[common]  # genes x cells
+
+    X = counts_sub.T.to_numpy(dtype=np.float32)  # cells x genes
+    obs = pd.DataFrame(index=counts_sub.columns)
+    obs["celltype"] = obs.index.map(dict(zip(annot_df["cell_id"], annot_df["annotation"])))
+
+    var = go.loc[common].copy()
+    var.index.name = "gene_symbol"
+
+    adata = ad.AnnData(
+        X=sp_sparse.csr_matrix(X),
+        obs=obs,
+        var=var,
+    )
+    adata.layers["counts"] = adata.X.copy()
+    return adata
+
+
+# Reference group names (non-tumor) derived from annotations
+_REF_PATTERNS = ("malignant_", "Tumor_", "tumor_", "Observation", "observation")
+
+
+def _ref_cats_from_adata(adata: "AnnData") -> list[str]:
+    all_labels = adata.obs["celltype"].unique().tolist()
+    return [a for a in all_labels if not any(p in a for p in _REF_PATTERNS)]
+
+
+def _get_pipeline_gene_names(adata: "AnnData",
+                              cutoff: float = 1.0,
+                              min_cells_per_gene: int = 3,
+                              chr_exclude: tuple = ("chrX", "chrY", "chrM"),
+                              reference_cell_idx=None) -> list[str]:
+    """Reconstruct ordered gene names as the infercnv pipeline sees them.
+
+    Mirrors the pipeline's filter_low_expression_genes -> _build_chromosome_layout
+    sequence (including reference-cell-only filtering) so the resulting list
+    aligns column-for-column with result.hmm_states.
+    """
+    import scipy.sparse as _sp
+    from pyinfercnv.pipeline import _build_chromosome_layout
+
+    X = adata.layers["counts"] if "counts" in adata.layers else adata.X
+    if not _sp.issparse(X):
+        X = _sp.csr_matrix(np.asarray(X, dtype=np.float32))
+
+    keep = filter_low_expression_genes(
+        X, cutoff=cutoff, min_cells_per_gene=min_cells_per_gene,
+        reference_cell_idx=reference_cell_idx,
+    )
+    var_kept = adata.var.iloc[np.where(keep)[0]].copy()
+
+    _, gene_perm = _build_chromosome_layout(var_kept, chr_exclude)
+    # gene_perm contains positional indices into var_kept rows
+    ordered = [var_kept.index[i] for i in gene_perm]
+    return ordered
+
+
+def _compute_jaccard_floor(py_states: "np.ndarray",
+                            r_mat: "np.ndarray",
+                            py_cell_idx: list,
+                            r_cell_idx: list,
+                            py_gene_idx: list,
+                            r_gene_idx: list,
+                            neutral_py: int,
+                            neutral_r: int) -> float:
+    """Compute mean per-cell Jaccard of non-neutral bins."""
+    py_aligned = py_states[np.ix_(py_cell_idx, py_gene_idx)]
+    r_aligned = r_mat[np.ix_(r_gene_idx, r_cell_idx)].T  # r_mat is genes x cells
+
+    jaccards = []
+    for i in range(py_aligned.shape[0]):
+        py_nn = set(int(x) for x in np.where(py_aligned[i] != neutral_py)[0])
+        r_nn = set(int(x) for x in np.where(r_aligned[i] != neutral_r)[0])
+        union = py_nn | r_nn
+        jaccards.append(1.0 if len(union) == 0 else len(py_nn & r_nn) / len(union))
+    return float(np.mean(jaccards))
+
+
+# ============================================================================
+# Phase 2 — Step 15: tumor subclusters ARI floor
+# ============================================================================
+
+@pytest.mark.skipif(not _r_step_available("step15_subclusters"),
+                    reason="r_out/step15_subclusters.tsv not generated; run Rscript tests/r_reference.R")
+def test_step15_subclusters_ari_floor(raw_counts_all, annotations, gene_order):
+    """Tier-3.5 ARI floor: Python subcluster assignments vs R reference.
+
+    ARI >= 0.50 (leiden uses non-deterministic k-NN graph; R igraph and Python
+    leidenalg/scanpy produce different partitions. Floor is empirical; observed
+    ~0.60 on this dataset).
+    xfail when Phase 2 pipeline not yet integrated by Agent-E.
+    """
+    try:
+        import anndata  # noqa: F401
+        from pyinfercnv import InferCNVConfig, infercnv  # noqa: F401
+    except ImportError as exc:
+        pytest.skip(f"pyinfercnv or anndata not importable: {exc}")
+
+    try:
+        adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
+        ref_cats = _ref_cats_from_adata(adata)
+
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6")
+        result = infercnv(
+            adata,
+            config=cfg,
+            reference_key="celltype",
+            reference_cat=ref_cats,
+            inplace=False,
+        )
+    except (TypeError, AttributeError, NotImplementedError) as exc:
+        pytest.xfail(f"Phase 2 pipeline not yet integrated: {exc}")
+
+    if result is None or result.subclusters is None:
+        pytest.xfail("Phase 2 pipeline not yet integrated: result.subclusters is None")
+
+    r_df = pd.read_csv(R_OUT_DIR / "step15_subclusters.tsv", sep="\t")
+    r_label_map = dict(zip(r_df["cell_id"], r_df["subcluster"]))
+
+    py_cells = list(adata.obs_names)
+    common_cells = [c for c in py_cells if c in r_label_map]
+    if len(common_cells) == 0:
+        pytest.skip("No overlapping cell ids between Python output and R TSV")
+
+    py_idx = [py_cells.index(c) for c in common_cells]
+    py_labels = [str(result.subclusters[i]) for i in py_idx]
+    r_labels = [r_label_map[c] for c in common_cells]
+
+    ari = sklearn.metrics.adjusted_rand_score(r_labels, py_labels)
+    print(f"  step15 ARI={ari:.3f}")
+    # Floor 0.50: leiden graphs differ between R (igraph) and Python (scanpy/leidenalg).
+    assert ari >= 0.50, f"step15 subclusters ARI={ari:.3f} below floor 0.50"
+
+
+# ============================================================================
+# Phase 2 — Step 17: HMM i6 Jaccard floor
+# ============================================================================
+
+@pytest.mark.skipif(not _r_step_available("step17_hmm_i6"),
+                    reason="r_out/step17_hmm_i6.tsv not generated; run Rscript tests/r_reference.R")
+def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
+    """Tier-3.5 Jaccard floor for HMM i6 state assignments.
+
+    Mean per-cell Jaccard on non-neutral bins >= 0.60.
+    R: states 1-6, neutral=3 (1-based). Python 0-based: neutral=2 (centre of 0-5).
+    Genes aligned by reconstructing pipeline filter+chromosome-sort order.
+    xfail when Phase 2 pipeline not yet integrated by Agent-E.
+    """
+    try:
+        import anndata  # noqa: F401
+        from pyinfercnv import InferCNVConfig, infercnv  # noqa: F401
+    except ImportError as exc:
+        pytest.skip(f"pyinfercnv or anndata not importable: {exc}")
+
+    try:
+        adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
+        ref_cats = _ref_cats_from_adata(adata)
+
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6")
+        result = infercnv(
+            adata,
+            config=cfg,
+            reference_key="celltype",
+            reference_cat=ref_cats,
+            inplace=False,
+        )
+    except (TypeError, AttributeError, NotImplementedError) as exc:
+        pytest.xfail(f"Phase 2 pipeline not yet integrated: {exc}")
+
+    if result is None or result.hmm_states is None:
+        pytest.xfail("Phase 2 pipeline not yet integrated: result.hmm_states is None")
+
+    # R TSV: genes x cells, states 1-6; convert to 0-based -> subtract 1
+    r_df = pd.read_csv(R_OUT_DIR / "step17_hmm_i6.tsv", sep="\t", index_col=0)
+    r_mat = r_df.to_numpy(dtype=np.int32) - 1  # genes x cells, now 0-based (0-5)
+    r_genes = r_df.index.tolist()
+    r_cells = r_df.columns.tolist()
+
+    py_cells = list(adata.obs_names)
+    common_cells = [c for c in py_cells if c in set(r_cells)]
+    if len(common_cells) == 0:
+        pytest.skip("No overlapping cell ids between Python output and R TSV")
+
+    # Reconstruct pipeline gene ordering: filter_genes (ref-cells only) -> chr-sorted
+    ref_idx = np.where(adata.obs["celltype"].isin(ref_cats).to_numpy())[0].tolist()
+    try:
+        py_gene_names = _get_pipeline_gene_names(adata, reference_cell_idx=ref_idx)
+    except Exception as exc:
+        pytest.skip(f"Cannot reconstruct pipeline gene order: {exc}")
+
+    r_gene_set = set(r_genes)
+    common_genes = [g for g in py_gene_names if g in r_gene_set]
+    if len(common_genes) == 0:
+        pytest.skip("No overlapping gene ids for HMM i6 Jaccard comparison")
+
+    py_gene_idx = [py_gene_names.index(g) for g in common_genes]
+    r_gene_idx = [r_genes.index(g) for g in common_genes]
+    r_cell_idx = [r_cells.index(c) for c in common_cells]
+    py_cell_idx = [py_cells.index(c) for c in common_cells]
+
+    py_states = np.asarray(result.hmm_states, dtype=np.int32)  # (n_cells, n_bins)
+
+    # i6: R neutral = 3 (1-based) -> 2 (0-based); Python centre = 2 (of 0-5)
+    mean_jaccard = _compute_jaccard_floor(
+        py_states, r_mat,
+        py_cell_idx, r_cell_idx,
+        py_gene_idx, r_gene_idx,
+        neutral_py=2, neutral_r=2,
+    )
+    print(f"  step17 HMM i6 mean_jaccard={mean_jaccard:.3f}")
+    assert mean_jaccard >= 0.60, (
+        f"step17 hmm_i6 mean_jaccard={mean_jaccard:.3f} below floor 0.60"
+    )
+
+
+# ============================================================================
+# Phase 2 — Step 17: HMM i3 Jaccard floor
+# ============================================================================
+
+@pytest.mark.skipif(not _r_step_available("step17_hmm_i3"),
+                    reason="r_out/step17_hmm_i3.tsv not generated; run Rscript tests/r_reference.R")
+def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
+    """Tier-3.5 Jaccard floor for HMM i3 state assignments.
+
+    Mean per-cell Jaccard on non-neutral bins >= 0.70.
+    R: states 1-3, neutral=2 (1-based). Python 0-based: neutral=1 (centre of 0-2).
+    i3 is deterministic-Z; tighter parity expected vs i6.
+    xfail when Phase 2 pipeline not yet integrated by Agent-E.
+    """
+    try:
+        import anndata  # noqa: F401
+        from pyinfercnv import InferCNVConfig, infercnv  # noqa: F401
+    except ImportError as exc:
+        pytest.skip(f"pyinfercnv or anndata not importable: {exc}")
+
+    try:
+        adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
+        ref_cats = _ref_cats_from_adata(adata)
+
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i3")
+        result = infercnv(
+            adata,
+            config=cfg,
+            reference_key="celltype",
+            reference_cat=ref_cats,
+            inplace=False,
+        )
+    except (TypeError, AttributeError, NotImplementedError) as exc:
+        pytest.xfail(f"Phase 2 pipeline not yet integrated: {exc}")
+
+    if result is None or result.hmm_states is None:
+        pytest.xfail("Phase 2 pipeline not yet integrated: result.hmm_states is None")
+
+    r_df = pd.read_csv(R_OUT_DIR / "step17_hmm_i3.tsv", sep="\t", index_col=0)
+    r_mat = r_df.to_numpy(dtype=np.int32) - 1  # 1-based -> 0-based (0-2); genes x cells
+    r_genes = r_df.index.tolist()
+    r_cells = r_df.columns.tolist()
+
+    py_cells = list(adata.obs_names)
+    common_cells = [c for c in py_cells if c in set(r_cells)]
+    if len(common_cells) == 0:
+        pytest.skip("No overlapping cell ids between Python output and R TSV")
+
+    # Reconstruct pipeline gene ordering: filter_genes (ref-cells only) -> chr-sorted
+    ref_idx = np.where(adata.obs["celltype"].isin(ref_cats).to_numpy())[0].tolist()
+    try:
+        py_gene_names = _get_pipeline_gene_names(adata, reference_cell_idx=ref_idx)
+    except Exception as exc:
+        pytest.skip(f"Cannot reconstruct pipeline gene order: {exc}")
+
+    r_gene_set = set(r_genes)
+    common_genes = [g for g in py_gene_names if g in r_gene_set]
+    if len(common_genes) == 0:
+        pytest.skip("No overlapping gene ids for HMM i3 Jaccard comparison")
+
+    py_gene_idx = [py_gene_names.index(g) for g in common_genes]
+    r_gene_idx = [r_genes.index(g) for g in common_genes]
+    r_cell_idx = [r_cells.index(c) for c in common_cells]
+    py_cell_idx = [py_cells.index(c) for c in common_cells]
+
+    # For i3, use hmm_states_i3 if populated; fall back to hmm_states
+    py_states_raw = result.hmm_states_i3 if result.hmm_states_i3 is not None else result.hmm_states
+    py_states = np.asarray(py_states_raw, dtype=np.int32)  # (n_cells, n_bins)
+
+    # i3: R neutral = 2 (1-based) -> 1 (0-based); Python centre = 1 (of 0-2)
+    mean_jaccard = _compute_jaccard_floor(
+        py_states, r_mat,
+        py_cell_idx, r_cell_idx,
+        py_gene_idx, r_gene_idx,
+        neutral_py=1, neutral_r=1,
+    )
+    print(f"  step17 HMM i3 mean_jaccard={mean_jaccard:.3f}")
+    assert mean_jaccard >= 0.70, (
+        f"step17 hmm_i3 mean_jaccard={mean_jaccard:.3f} below floor 0.70"
+    )

@@ -117,4 +117,111 @@ infercnv_obj <- infercnv:::remove_outliers_norm(
 )
 write_step(infercnv_obj, "step16_outlier_pruned")
 
-cat("[r_reference] SUCCESS — all TSVs written to", output_dir, "\n")
+cat("[r_reference] Phase 1 SUCCESS — all Phase 1 TSVs written to", output_dir, "\n")
+
+# =============================================================================
+# Phase 2: HMM i6 + HMM i3 via full infercnv::run()
+# =============================================================================
+# Each run() is wrapped in tryCatch so Phase 1 TSVs are never lost on failure.
+# Produces:
+#   tests/r_out/step15_subclusters.tsv  (cell -> subcluster label)
+#   tests/r_out/step17_hmm_i6.tsv      (genes x cells, integer states 1-6)
+#   tests/r_out/step17_hmm_i3.tsv      (genes x cells, integer states 1-3)
+
+phase2_run <- function(hmm_type, tmp_dir) {
+    cat(sprintf("[r_reference] Phase 2: starting HMM %s run in %s\n", hmm_type, tmp_dir))
+    dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+
+    # Fresh infercnv object (do NOT reuse the mutated Phase 1 obj)
+    fresh_obj <- infercnv::CreateInfercnvObject(
+        raw_counts_matrix = counts_file,
+        gene_order_file = gene_order_file,
+        annotations_file = annotations_file,
+        ref_group_names = ref_annotations,
+        delim = "\t"
+    )
+
+    result_obj <- infercnv::run(
+        infercnv_obj              = fresh_obj,
+        cutoff                    = 1,
+        out_dir                   = tmp_dir,
+        cluster_by_groups         = TRUE,
+        denoise                   = FALSE,
+        HMM                      = TRUE,
+        HMM_type                  = hmm_type,
+        BayesMaxPNormal           = 0,
+        no_plot                   = TRUE,
+        no_prelim_plot            = TRUE,
+        save_rds                  = TRUE,
+        num_threads               = 1,
+        up_to_step                = 17
+    )
+
+    # --- step15: subclusters ---
+    subs <- result_obj@tumor_subclusters$subclusters
+    cat(sprintf("[r_reference] tumor_subclusters groups: %s\n",
+                paste(names(subs), collapse = ", ")))
+    rows <- list()
+    for (grp in names(subs)) {
+        for (sub_idx in names(subs[[grp]])) {
+            cell_names <- names(subs[[grp]][[sub_idx]])
+            if (is.null(cell_names)) {
+                # fallback: the sub-element itself is a named vector of cell indices
+                cell_names <- subs[[grp]][[sub_idx]]
+            }
+            for (cid in cell_names) {
+                rows[[length(rows) + 1]] <- data.frame(
+                    cell_id    = cid,
+                    subcluster = sprintf("%s.%s", grp, sub_idx),
+                    stringsAsFactors = FALSE
+                )
+            }
+        }
+    }
+    if (length(rows) > 0 && hmm_type == "i6") {
+        sub_df <- do.call(rbind, rows)
+        sub_path <- file.path(output_dir, "step15_subclusters.tsv")
+        write.table(sub_df, file = sub_path, sep = "\t", quote = FALSE, row.names = FALSE)
+        cat(sprintf("[r_reference] wrote %s (%d cells)\n", sub_path, nrow(sub_df)))
+    }
+
+    # --- step17: HMM states ---
+    # The hmm.infercnv_obj is saved as a .infercnv_obj RDS in tmp_dir.
+    # Pattern: 17_HMM_pred<resume_token>.infercnv_obj
+    hmm_rds_files <- list.files(tmp_dir, pattern = "^17_.*\\.infercnv_obj$", full.names = TRUE)
+    cat(sprintf("[r_reference] step17 RDS candidates: %s\n",
+                paste(hmm_rds_files, collapse = ", ")))
+    if (length(hmm_rds_files) == 0) {
+        cat(sprintf("[r_reference] WARNING: no step-17 RDS found in %s; skipping HMM TSV\n", tmp_dir))
+        return(invisible(NULL))
+    }
+    hmm_obj <- readRDS(hmm_rds_files[[1]])
+    step17_name <- sprintf("step17_hmm_%s", tolower(hmm_type))
+    step17_path <- file.path(output_dir, paste0(step17_name, ".tsv"))
+    write.table(hmm_obj@expr.data, file = step17_path,
+                sep = "\t", quote = FALSE,
+                col.names = NA, row.names = TRUE)
+    cat(sprintf("[r_reference] wrote %s (%d genes x %d cells)\n",
+                step17_path, nrow(hmm_obj@expr.data), ncol(hmm_obj@expr.data)))
+    invisible(NULL)
+}
+
+# --- Run i6 (also produces step15_subclusters.tsv) ---
+tryCatch({
+    tmp_i6 <- file.path(tempdir(), "infercnv_ref_i6")
+    phase2_run("i6", tmp_i6)
+}, error = function(e) {
+    cat(sprintf("[r_reference] Phase 2 i6 reference generation skipped: %s\n",
+                conditionMessage(e)))
+})
+
+# --- Run i3 ---
+tryCatch({
+    tmp_i3 <- file.path(tempdir(), "infercnv_ref_i3")
+    phase2_run("i3", tmp_i3)
+}, error = function(e) {
+    cat(sprintf("[r_reference] Phase 2 i3 reference generation skipped: %s\n",
+                conditionMessage(e)))
+})
+
+cat("[r_reference] DONE — Phase 1 + Phase 2 TSV generation complete\n")
