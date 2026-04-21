@@ -57,6 +57,12 @@ class InferCNVConfig:  # noqa: N801
 
     # --- Phase 2 subcluster partition ---
     tumor_subcluster_partition_method: str = "leiden"  # noqa: N815
+    # R cluster_by_groups=TRUE: run leiden independently per observation/
+    # reference group (each annotation category is its own leiden input
+    # and its own set of subcluster IDs). False => leiden on all non-ref
+    # cells pooled, and ref cells get a single sentinel label. Default
+    # matches R behaviour.
+    cluster_by_groups: bool = True
 
     # --- misc ---
     lfc_clip: float = 3.0

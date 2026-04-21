@@ -176,8 +176,9 @@ def test_run_phase2_i3_no_hspike_call(monkeypatch):
     assert result.hmm_states is None
 
 
-def test_subcluster_sentinel_on_refs(monkeypatch):
-    """Reference cells must have -1 in subclusters array."""
+def test_subcluster_default_groups_all_cells(monkeypatch):
+    """Default ``cluster_by_groups=True`` gives every cell a non-negative id
+    (R cluster_by_groups=TRUE parity)."""
     adata = _make_adata(n_cells=30, n_genes=60, n_ref=10)
     result_p1 = _make_phase1_result(adata)
     fake_cal = _make_fake_calibration()
@@ -191,10 +192,43 @@ def test_subcluster_sentinel_on_refs(monkeypatch):
         result_p1, adata, config=cfg,
         reference_key="celltype", reference_cat="normal",
     )
+    # R cluster_by_groups=TRUE: refs get real subcluster ids (not -1),
+    # so they flow through the HMM step same as tumor cells.
+    assert np.all(result.subclusters >= 0), (
+        "cluster_by_groups=True: every cell should have a non-negative id"
+    )
+    # Distinct id space between ref and non-ref groups (leiden runs
+    # independently per annotation category).
     is_ref = result.cell_meta["is_reference"].to_numpy()
-    assert np.all(result.subclusters[is_ref] == -1), "ref cells must have sentinel -1"
-    # Non-ref cells must have non-negative labels
-    assert np.all(result.subclusters[~is_ref] >= 0), "tumor cells must have cluster >= 0"
+    ref_ids = set(result.subclusters[is_ref].tolist())
+    tumor_ids = set(result.subclusters[~is_ref].tolist())
+    assert ref_ids.isdisjoint(tumor_ids), (
+        f"ref group id(s) {ref_ids} overlap tumor id(s) {tumor_ids}"
+    )
+
+
+def test_subcluster_fallback_sentinel_when_cluster_by_groups_false(monkeypatch):
+    """``cluster_by_groups=False`` keeps the legacy ref-sentinel behaviour."""
+    adata = _make_adata(n_cells=30, n_genes=60, n_ref=10)
+    result_p1 = _make_phase1_result(adata)
+    fake_cal = _make_fake_calibration()
+
+    import pyinfercnv.pipeline_phase2 as p2mod
+    monkeypatch.setattr(p2mod, "_calibrate_hmm_emission", lambda *a, **kw: fake_cal)
+
+    cfg = InferCNVConfig(
+        HMM=True, HMM_type="i6",
+        tumor_subcluster_partition_method="leiden",
+        cluster_by_groups=False,
+    )
+    from pyinfercnv.pipeline_phase2 import run_phase2
+    result = run_phase2(
+        result_p1, adata, config=cfg,
+        reference_key="celltype", reference_cat="normal",
+    )
+    is_ref = result.cell_meta["is_reference"].to_numpy()
+    assert np.all(result.subclusters[is_ref] == -1), "ref cells sentinel"
+    assert np.all(result.subclusters[~is_ref] >= 0), "tumor cells non-negative"
 
 
 def test_ref_neutral_in_hmm_output(monkeypatch):

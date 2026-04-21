@@ -232,10 +232,17 @@ def run_phase2(
     cnv_matrix = result_phase1.cnv_matrix
     chr_pos = result_phase1.chr_pos
 
-    # Step 15 — subclustering on non-reference cells
+    # Step 15 — subclustering. When reference_key is available we honour
+    # R's cluster_by_groups=TRUE: iterate over unique category labels in
+    # adata.obs[reference_key] and run leiden per group.
+    group_labels = None
+    if reference_key is not None and reference_key in adata.obs.columns:
+        group_labels = adata.obs[reference_key].to_numpy()
+
     subclusters = _run_subclustering(
         cnv_matrix, is_reference,
         config=config, random_state=random_state, profile=profile,
+        group_labels=group_labels,
     )
 
     # HMM branch
@@ -333,33 +340,36 @@ def _run_subclustering(
     config: "InferCNVConfig",
     random_state: int,
     profile: dict[str, Any] | None,
+    group_labels: NDArray[np.object_] | None = None,
 ) -> NDArray[np.int32]:
-    """Run the configured subcluster backend on the non-reference cells.
+    """Run the configured subcluster backend, per-observation-group when
+    ``config.cluster_by_groups`` is True and ``group_labels`` is supplied.
 
     Dispatches to one of:
         * :func:`pyinfercnv.subcluster.leiden_subcluster`
         * :func:`pyinfercnv.subcluster.random_tree_subcluster`
         * :func:`pyinfercnv.subcluster.qnorm_subcluster`
-    based on ``config.tumor_subcluster_partition_method`` (Phase 2 config
-    extension; see NB below).
+    based on ``config.tumor_subcluster_partition_method``.
 
-    Reference cells receive :data:`_SUBCLUSTER_REF_SENTINEL`. R drops them
-    from subclustering but we preserve the vector length to match the
-    Phase 1 cell axis.
+    When ``group_labels is not None`` and ``config.cluster_by_groups``,
+    this function mirrors R ``define_signif_tumor_subclusters(
+    cluster_by_groups=TRUE)`` exactly: it iterates over the unique
+    categories in ``group_labels`` (which normally comes from the
+    ``reference_key`` column of ``adata.obs``), runs the partition
+    backend independently within each group, and assigns globally
+    unique subcluster ids. Reference cells also receive real subcluster
+    ids (no sentinel) so the HMM step processes them, matching R.
+
+    When ``group_labels is None`` or ``cluster_by_groups=False``,
+    falls back to the legacy behaviour: a single backend call on all
+    non-reference cells with reference cells marked by
+    :data:`_SUBCLUSTER_REF_SENTINEL`.
 
     Returns
     -------
     labels
-        Shape (n_cells,) int32. Non-reference cells have cluster ids
-        0..K-1; reference cells have -1.
-
-    Notes
-    -----
-    ``InferCNVConfig`` currently lacks a ``tumor_subcluster_partition_method``
-    field (Phase 2 plan Task 49 adds it). During G2 review, codex may
-    flag this as an implicit dependency; the implementation will add the
-    field to config.py in parallel. Until then the helper defaults to
-    ``'leiden'`` when absent.
+        Shape (n_cells,) int32. Non-negative ids 0..K-1 (per-group
+        mode) or 0..K-1 on non-refs + -1 sentinel on refs (fallback).
     """
     n_cells = cnv_matrix.shape[0]
     non_ref_mask = ~is_reference
@@ -376,35 +386,64 @@ def _run_subclustering(
     rss0 = _rss_mb()
 
     method = getattr(config, "tumor_subcluster_partition_method", "leiden")
-    non_ref_matrix = cnv_matrix[non_ref_mask]
+    cluster_by_groups = bool(getattr(config, "cluster_by_groups", True))
 
-    if method == "leiden":
-        from pyinfercnv.subcluster.leiden import leiden_subcluster
-        non_ref_labels = leiden_subcluster(
-            non_ref_matrix,
-            random_state=random_state,
-        )
-    elif method == "random_trees":
-        from pyinfercnv.subcluster.random_trees import random_tree_subcluster
-        non_ref_labels = random_tree_subcluster(
-            non_ref_matrix,
-            random_state=random_state,
-        )
-    elif method == "qnorm":
-        from pyinfercnv.subcluster.qnorm import qnorm_subcluster
-        non_ref_labels = qnorm_subcluster(non_ref_matrix)
-    else:
+    def _partition(X: NDArray[np.float32]) -> NDArray[np.int32]:
+        if method == "leiden":
+            from pyinfercnv.subcluster.leiden import leiden_subcluster
+            return leiden_subcluster(X, random_state=random_state)
+        if method == "random_trees":
+            from pyinfercnv.subcluster.random_trees import random_tree_subcluster
+            return random_tree_subcluster(X, random_state=random_state)
+        if method == "qnorm":
+            from pyinfercnv.subcluster.qnorm import qnorm_subcluster
+            return qnorm_subcluster(X)
         raise ValueError(
             f"tumor_subcluster_partition_method must be one of "
             f"('leiden', 'random_trees', 'qnorm'), got {method!r}"
         )
 
-    non_ref_labels = np.asarray(non_ref_labels, dtype=np.int32)
+    if group_labels is not None and cluster_by_groups:
+        # Per-group subclustering (R cluster_by_groups=TRUE).
+        group_labels = np.asarray(group_labels)
+        if group_labels.shape[0] != n_cells:
+            raise ValueError(
+                f"group_labels length {group_labels.shape[0]} != n_cells {n_cells}"
+            )
 
-    # Assemble full-length label array with sentinel for ref cells
-    labels = np.full(n_cells, _SUBCLUSTER_REF_SENTINEL, dtype=np.int32)
-    non_ref_idx = np.where(non_ref_mask)[0]
-    labels[non_ref_idx] = non_ref_labels
+        labels = np.full(n_cells, -1, dtype=np.int32)
+        # Stable group ordering: first-occurrence order in group_labels.
+        seen: dict[object, None] = {}
+        for g in group_labels.tolist():
+            if g not in seen:
+                seen[g] = None
+        group_order = list(seen.keys())
+
+        next_id = 0
+        for g in group_order:
+            member_mask = group_labels == g
+            member_idx = np.where(member_mask)[0]
+            if member_idx.size == 0:
+                continue
+            sub_X = cnv_matrix[member_idx]
+            local = np.asarray(_partition(sub_X), dtype=np.int32)
+            # Offset so ids are globally unique across groups.
+            # Each distinct local id gets a fresh global id.
+            _uniq = sorted({int(v) for v in local})
+            remap = {v: next_id + i for i, v in enumerate(_uniq)}
+            global_labels = np.array([remap[int(v)] for v in local],
+                                      dtype=np.int32)
+            labels[member_idx] = global_labels
+            next_id += len(_uniq)
+    else:
+        # Fallback (legacy / when no group_labels supplied): pooled
+        # non-ref leiden + sentinel for refs. Preserved for callers
+        # that do not pass reference_key.
+        non_ref_matrix = cnv_matrix[non_ref_mask]
+        non_ref_labels = np.asarray(_partition(non_ref_matrix), dtype=np.int32)
+        labels = np.full(n_cells, _SUBCLUSTER_REF_SENTINEL, dtype=np.int32)
+        non_ref_idx = np.where(non_ref_mask)[0]
+        labels[non_ref_idx] = non_ref_labels
 
     _profile_block(profile, "15_subcluster", t0, rss0)
     return labels

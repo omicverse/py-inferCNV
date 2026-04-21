@@ -141,6 +141,11 @@ phase2_run <- function(hmm_type, tmp_dir) {
         delim = "\t"
     )
 
+    # Force the `simple` + CPM Leiden path (R default is `PCA` via Seurat +
+    # modularity-via-caller-default, but the PCA path depends on Seurat's
+    # internal SNN/irlba which we do not replicate in python. The "simple"
+    # path on both sides uses euclidean KNN + igraph::cluster_leiden with
+    # CPM, so the C core is identical to python-igraph's community_leiden.
     result_obj <- infercnv::run(
         infercnv_obj              = fresh_obj,
         cutoff                    = 1,
@@ -150,6 +155,8 @@ phase2_run <- function(hmm_type, tmp_dir) {
         HMM                      = TRUE,
         HMM_type                  = hmm_type,
         BayesMaxPNormal           = 0,
+        leiden_method             = "simple",
+        leiden_function           = "CPM",
         no_plot                   = TRUE,
         no_prelim_plot            = TRUE,
         save_rds                  = TRUE,
