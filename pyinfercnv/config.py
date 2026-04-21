@@ -45,6 +45,7 @@ class InferCNVConfig:  # noqa: N801
 
     # --- I/O contract ---
     counts_layer: str | None = "counts"
+    chr_exclude: tuple[str, ...] = ("chrX", "chrY", "chrM")
 
     # --- Phase 2+ placeholders (declared now so API stable across phases) ---
     HMM: bool = False  # noqa: N815

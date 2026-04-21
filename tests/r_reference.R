@@ -28,17 +28,12 @@ dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 annotations <- read.table(annotations_file, header = FALSE, sep = "\t",
                           stringsAsFactors = FALSE)
 colnames(annotations) <- c("cell_id", "annotation")
-# Reference groups = everything NOT named "Microglia/Macrophage" / "Oligodendrocytes" style.
-# For the bundled oligodendroglioma fixture, the non-observation annotations are
-# "Microglia/Macrophage" and "Oligodendrocytes" (brain normal refs).
-ref_annotations <- setdiff(unique(annotations$annotation),
-                           c("Observation", "observation",
-                             "Malignant", "malignant",
-                             "tumor", "Tumor",
-                             "MGH54", "MGH36", "MGH53", "MGH97"))
-# Fall back: anything that looks like tumor/Observation gets excluded; rest are refs
-# Print once for debug
-cat("[r_reference] unique annotations:", paste(unique(annotations$annotation), collapse = ", "), "\n")
+all_labels <- unique(annotations$annotation)
+# tumor labels start with `malignant_` / `Tumor` / `Observation` — parenthesized
+# "(non-malignant)" must NOT match, so we anchor with ^ and require `_` suffix.
+is_tumor <- grepl("^malignant_|^[Tt]umor_|^[Oo]bservation($|_)", all_labels)
+ref_annotations <- all_labels[!is_tumor]
+cat("[r_reference] unique annotations:", paste(all_labels, collapse = ", "), "\n")
 cat("[r_reference] ref_annotations:", paste(ref_annotations, collapse = ", "), "\n")
 
 # --- Create infercnv object ---
