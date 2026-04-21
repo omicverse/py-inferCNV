@@ -45,3 +45,15 @@ def test_smooth_method_enum():
 def test_bayes_max_p_normal_range():
     with pytest.raises(ValueError, match="BayesMaxPNormal"):
         InferCNVConfig(BayesMaxPNormal=1.5).validate()
+
+
+def test_tumor_subcluster_partition_method_default():
+    """G2 Q2: default is 'leiden'."""
+    cfg = InferCNVConfig()
+    assert cfg.tumor_subcluster_partition_method == "leiden"
+
+
+def test_tumor_subcluster_partition_method_invalid_raises():
+    """G2 Q2: invalid method raises ValueError."""
+    with pytest.raises(ValueError, match="tumor_subcluster_partition_method"):
+        InferCNVConfig(tumor_subcluster_partition_method="kmeans").validate()

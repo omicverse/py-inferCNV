@@ -55,6 +55,9 @@ class InferCNVConfig:  # noqa: N801
     BayesMaxPNormal: float = 0.5  # noqa: N815
     analysis_mode: AnalysisMode = "subclusters"
 
+    # --- Phase 2 subcluster partition ---
+    tumor_subcluster_partition_method: str = "leiden"  # noqa: N815
+
     # --- misc ---
     lfc_clip: float = 3.0
     denoise: bool = False
@@ -83,4 +86,10 @@ class InferCNVConfig:  # noqa: N801
             raise ValueError(
                 "HMM_transition_prob must be in (0, 1/(K-1)=0.2), "
                 f"got {self.HMM_transition_prob}"
+            )
+        if self.tumor_subcluster_partition_method not in ("leiden", "random_trees", "qnorm"):
+            raise ValueError(
+                f"tumor_subcluster_partition_method must be one of "
+                f"('leiden', 'random_trees', 'qnorm'), "
+                f"got {self.tumor_subcluster_partition_method!r}"
             )

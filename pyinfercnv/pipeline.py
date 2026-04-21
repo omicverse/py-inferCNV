@@ -270,6 +270,15 @@ def infercnv(
         profile=profile,
     )
 
+    # Phase 2 — HMM subclustering + state calls (only when cfg.HMM=True)
+    if cfg.HMM:
+        from pyinfercnv.pipeline_phase2 import run_phase2
+        result = run_phase2(
+            result, adata, config=cfg,
+            reference_key=reference_key, reference_cat=reference_cat,
+            random_state=0, profile=profile,
+        )
+
     if inplace:
         result.write_to_anndata(adata, key_added=key_added)
         return None

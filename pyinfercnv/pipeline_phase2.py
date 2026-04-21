@@ -97,13 +97,6 @@ Matrix layout
 * ``cnv_regions`` output: long-format pandas DataFrame; one row per
   non-neutral state run, columns
   ``[cell_group, subcluster, chromosome, bin_start, bin_end, state, cn]``.
-
-Skeleton status
----------------
-G2-pending API skeleton — all function bodies raise
-``NotImplementedError("skeleton — G2 pending")``. Implementation lands in
-Wave 2 (after codex G2 adjudication on API + subcluster aggregation logic
-+ profile hook placement).
 """
 from __future__ import annotations
 
@@ -136,6 +129,9 @@ _I3_NEUTRAL_IDX: int = 1
 #: Sentinel for reference cells in the subclusters array (R drops refs from
 #: subclustering; we keep the slot but mark with -1).
 _SUBCLUSTER_REF_SENTINEL: np.int32 = np.int32(-1)
+
+#: i3 CN delta values for states (DEL, neutral, AMP) -> signed delta
+_I3_CN_DELTA: dict[int, float] = {0: -1.0, 1: 0.0, 2: 1.0}
 
 
 # --------------------------------------------------------------------------- #
@@ -181,7 +177,7 @@ def run_phase2(
         default "leiden" via helper), ``analysis_mode``, ``cutoff``,
         ``window_length`` (for hspike replay), plus the preprocess knobs.
     reference_key, reference_cat
-        Required when ``config.HMM_type == "i6"``: they drive the global→
+        Required when ``config.HMM_type == "i6"``: they drive the global->
         ref-local index remap via :func:`_remap_ref_groups_to_local` (G2
         Q10). When ``config.HMM_type == "i3"``, also used by
         :func:`_validate_reference_and_raise` to enforce Phase 1 G3 Q6
@@ -210,12 +206,119 @@ def run_phase2(
     ValueError
         * If ``result_phase1.cnv_matrix`` lacks the dtype/layout contract.
         * If ``config.HMM_type == "i6"`` and ``result_phase1.ref_counts_raw is None``
-          (no reference cells → hspike impossible).
+          (no reference cells -> hspike impossible).
         * If ``reference_key`` was supplied but no cells matched
           ``reference_cat`` (Phase 1 G3 Q6 defensive, applied to Phase 2's
           own i3 re-estimation path).
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    from pyinfercnv.result import InferCNVResult
+
+    # Short-circuit when HMM is disabled
+    if not config.HMM:
+        return result_phase1
+
+    # Use profile dict from result_phase1 if none provided (shared timeline)
+    if profile is None:
+        profile = result_phase1.profile if result_phase1.profile is not None else {}
+
+    # Derive reference mask from Phase 1 cell_meta
+    is_reference: NDArray[np.bool_] = result_phase1.cell_meta["is_reference"].to_numpy().astype(bool)
+
+    # Validate reference and get canonical mask
+    is_reference = _validate_reference_and_raise(
+        adata, reference_key, reference_cat, is_reference
+    )
+
+    cnv_matrix = result_phase1.cnv_matrix
+    chr_pos = result_phase1.chr_pos
+
+    # Step 15 — subclustering on non-reference cells
+    subclusters = _run_subclustering(
+        cnv_matrix, is_reference,
+        config=config, random_state=random_state, profile=profile,
+    )
+
+    # HMM branch
+    hmm_type = config.HMM_type
+    hmm_states_i6: NDArray[np.int8] | None = None
+    hmm_states_i3: NDArray[np.int8] | None = None
+
+    if hmm_type == "i6":
+        if result_phase1.ref_counts_raw is None:
+            raise ValueError(
+                "config.HMM_type='i6' requires ref_counts_raw (hspike calibration), "
+                "but result_phase1.ref_counts_raw is None. "
+                "Ensure reference cells are present in the Phase 1 run."
+            )
+        # G2 Q10 — remap global ref indices to local ref_counts_raw row indices
+        ref_groups_local = _remap_ref_groups_to_local(
+            adata, is_reference, reference_key, reference_cat
+        )
+        # Fallback: single group over all ref rows
+        if ref_groups_local is None:
+            n_ref = int(is_reference.sum())
+            ref_groups_local = {"normalsToUse": np.arange(n_ref, dtype=np.intp)}
+
+        _t_hspike = time.perf_counter()
+        _rss_hspike = _rss_mb()
+        cal = _calibrate_hmm_emission(
+            result_phase1.ref_counts_raw, ref_groups_local,
+            config=config, random_state=random_state, profile=profile,
+        )
+        _profile_block(profile, "16_hspike_calibrate", _t_hspike, _rss_hspike)
+        hmm_states_i6 = _run_hmm_by_subcluster(
+            cnv_matrix, chr_pos, subclusters, is_reference,
+            hmm_type="i6",
+            transition_prob=config.HMM_transition_prob,
+            i6_calibration=cal,
+            i3_mus=None,
+            i3_sigmas=None,
+            profile=profile,
+        )
+
+    elif hmm_type == "i3":
+        import pyinfercnv.hmm.i3 as _i3
+        ref_idx = np.where(is_reference)[0]
+        mus, sigs = _i3.estimate_i3_state_params(
+            cnv_matrix, ref_idx, config.HMM_i3_pval
+        )
+        hmm_states_i3 = _run_hmm_by_subcluster(
+            cnv_matrix, chr_pos, subclusters, is_reference,
+            hmm_type="i3",
+            transition_prob=config.HMM_transition_prob,
+            i6_calibration=None,
+            i3_mus=mus,
+            i3_sigmas=sigs,
+            profile=profile,
+        )
+    else:
+        raise ValueError(f"config.HMM_type must be 'i6' or 'i3', got {hmm_type!r}")
+
+    # Step 17b — build CNV regions
+    active_states = hmm_states_i6 if hmm_type == "i6" else hmm_states_i3
+    t0 = time.perf_counter()
+    rss0 = _rss_mb()
+    cnv_regions = _build_cnv_regions(
+        active_states, subclusters, chr_pos,
+        hmm_type=hmm_type,
+    )
+    _profile_block(profile, "18_cnv_regions", t0, rss0)
+
+    # Build new result — reuse Phase 1 arrays BY REFERENCE (G2 Q5)
+    result = InferCNVResult(
+        chr_pos=result_phase1.chr_pos,
+        cnv_matrix=result_phase1.cnv_matrix,
+        cnv_matrix_fc=result_phase1.cnv_matrix_fc,
+        cell_meta=result_phase1.cell_meta,
+        gene_values=result_phase1.gene_values,
+        ref_counts_raw=result_phase1.ref_counts_raw,
+        subclusters=subclusters,
+        hmm_states=hmm_states_i6,
+        hmm_states_i3=hmm_states_i3,
+        cnv_regions=cnv_regions,
+        profile=profile,
+    )
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +361,53 @@ def _run_subclustering(
     field to config.py in parallel. Until then the helper defaults to
     ``'leiden'`` when absent.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    n_cells = cnv_matrix.shape[0]
+    non_ref_mask = ~is_reference
+    n_non_ref = int(non_ref_mask.sum())
+
+    if n_non_ref == 0:
+        raise ValueError(
+            "No non-reference cells found for subclustering. "
+            "All cells are marked as reference (is_reference=True). "
+            "Phase 2 requires at least one tumour cell."
+        )
+
+    t0 = time.perf_counter()
+    rss0 = _rss_mb()
+
+    method = getattr(config, "tumor_subcluster_partition_method", "leiden")
+    non_ref_matrix = cnv_matrix[non_ref_mask]
+
+    if method == "leiden":
+        from pyinfercnv.subcluster.leiden import leiden_subcluster
+        non_ref_labels = leiden_subcluster(
+            non_ref_matrix,
+            random_state=random_state,
+        )
+    elif method == "random_trees":
+        from pyinfercnv.subcluster.random_trees import random_tree_subcluster
+        non_ref_labels = random_tree_subcluster(
+            non_ref_matrix,
+            random_state=random_state,
+        )
+    elif method == "qnorm":
+        from pyinfercnv.subcluster.qnorm import qnorm_subcluster
+        non_ref_labels = qnorm_subcluster(non_ref_matrix)
+    else:
+        raise ValueError(
+            f"tumor_subcluster_partition_method must be one of "
+            f"('leiden', 'random_trees', 'qnorm'), got {method!r}"
+        )
+
+    non_ref_labels = np.asarray(non_ref_labels, dtype=np.int32)
+
+    # Assemble full-length label array with sentinel for ref cells
+    labels = np.full(n_cells, _SUBCLUSTER_REF_SENTINEL, dtype=np.int32)
+    non_ref_idx = np.where(non_ref_mask)[0]
+    labels[non_ref_idx] = non_ref_labels
+
+    _profile_block(profile, "15_subcluster", t0, rss0)
+    return labels
 
 
 def _calibrate_hmm_emission(
@@ -272,10 +421,21 @@ def _calibrate_hmm_emission(
     """Thin wrapper over :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission`.
 
     Exists to centralise the psutil hook placement (G1 P11 key
-    ``p2_hspike_calibrate``) and to supply Phase-2-level defaults for
+    ``16_hspike_calibrate``) and to supply Phase-2-level defaults for
     simulation kwargs without polluting the public hspike signature.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    from pyinfercnv.hmm.hspike import calibrate_i6_emission  # late import — allows monkeypatching
+
+    cal = calibrate_i6_emission(
+        ref_counts_raw,
+        ref_groups_local,
+        config=config,
+        sim_method="meanvar",
+        aggregate_normals=False,
+        random_state=random_state,
+        profile=profile,
+    )
+    return cal
 
 
 def _run_hmm_by_subcluster(
@@ -289,6 +449,7 @@ def _run_hmm_by_subcluster(
     i6_calibration: "HspikeCalibration | None",
     i3_mus: NDArray[np.float64] | None,
     i3_sigmas: NDArray[np.float64] | None,
+    profile: dict[str, Any] | None = None,
 ) -> NDArray[np.int8]:
     """Predict CNV states by aggregating across subclusters per chromosome.
 
@@ -325,7 +486,71 @@ def _run_hmm_by_subcluster(
     ValueError
         ``hmm_type in {"i6", "i3"}`` violated, or shape mismatches.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    if hmm_type not in ("i6", "i3"):
+        raise ValueError(f"hmm_type must be 'i6' or 'i3', got {hmm_type!r}")
+
+    n_cells, n_bins = cnv_matrix.shape
+    neutral_idx = _I6_NEUTRAL_IDX if hmm_type == "i6" else _I3_NEUTRAL_IDX
+
+    hmm_states = np.full((n_cells, n_bins), neutral_idx, dtype=np.int8)
+
+    # Build chromosome start/end pairs
+    chroms = list(chr_pos.keys())
+    starts = [chr_pos[c] for c in chroms]
+    ends = starts[1:] + [n_bins]
+
+    unique_subclusters = np.unique(subclusters)
+    # Skip the reference sentinel
+    tumor_subclusters = unique_subclusters[unique_subclusters != _SUBCLUSTER_REF_SENTINEL]
+
+    t0 = time.perf_counter()
+    rss0 = _rss_mb()
+
+    if hmm_type == "i6":
+        from pyinfercnv.hmm.i6 import predict_i6
+
+        for sc in tumor_subclusters:
+            members = np.where(subclusters == sc)[0]
+            n_members = len(members)
+            sigmas = i6_calibration.sigmas_for_num_cells(n_members)  # shape (6,)
+            state_mus = i6_calibration.state_mus
+
+            for chrom, start, end in zip(chroms, starts, ends):
+                if end <= start:
+                    continue
+                x = cnv_matrix[members, start:end].mean(axis=0)  # (n_bins_chr,)
+                # predict_i6 expects chr_pos with first start == 0
+                states = predict_i6(
+                    x[np.newaxis, :],
+                    {chrom: 0},
+                    transition_prob=transition_prob,
+                    state_mus=state_mus,
+                    state_sigmas=sigmas,
+                )  # shape (1, n_bins_chr)
+                hmm_states[np.ix_(members, np.arange(start, end))] = states[0]
+
+    else:  # i3
+        from pyinfercnv.hmm.i3 import predict_i3
+
+        for sc in tumor_subclusters:
+            members = np.where(subclusters == sc)[0]
+
+            for chrom, start, end in zip(chroms, starts, ends):
+                if end <= start:
+                    continue
+                x = cnv_matrix[members, start:end].mean(axis=0)  # (n_bins_chr,)
+                states = predict_i3(
+                    x[np.newaxis, :],
+                    {chrom: 0},
+                    transition_prob=transition_prob,
+                    state_mus=i3_mus,
+                    state_sigmas=i3_sigmas,
+                )  # shape (1, n_bins_chr)
+                hmm_states[np.ix_(members, np.arange(start, end))] = states[0]
+
+    _profile_block(profile, "17_hmm", t0, rss0)
+
+    return hmm_states
 
 
 def _build_cnv_regions(
@@ -358,7 +583,69 @@ def _build_cnv_regions(
     viz code should consume this DataFrame rather than re-scanning
     ``hmm_states``.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    neutral_idx = _I6_NEUTRAL_IDX if hmm_type == "i6" else _I3_NEUTRAL_IDX
+
+    if hmm_type == "i6":
+        from pyinfercnv.hmm.i6 import I6_CNV_LEVELS
+        cn_map: dict[int, float] = {i: float(I6_CNV_LEVELS[i]) for i in range(len(I6_CNV_LEVELS))}
+    else:
+        cn_map = {0: -1.0, 1: 0.0, 2: 1.0}
+
+    chroms = list(chr_pos.keys())
+    n_bins = hmm_states.shape[1]
+    starts = [chr_pos[c] for c in chroms]
+    ends = starts[1:] + [n_bins]
+
+    rows: list[dict] = []
+
+    unique_subclusters = np.unique(subclusters)
+    tumor_subclusters = unique_subclusters[unique_subclusters != _SUBCLUSTER_REF_SENTINEL]
+
+    for sc in tumor_subclusters:
+        members = np.where(subclusters == sc)[0]
+        cell_group = f"subcluster_{sc}"
+
+        # All cells in same subcluster share the same HMM trace — pick first member
+        # (by construction from _run_hmm_by_subcluster)
+        rep = members[0]
+
+        for chrom, start, end in zip(chroms, starts, ends):
+            if end <= start:
+                continue
+            trace = hmm_states[rep, start:end]
+
+            # RLE over this chromosome trace
+            i = 0
+            while i < len(trace):
+                state = int(trace[i])
+                j = i + 1
+                while j < len(trace) and int(trace[j]) == state:
+                    j += 1
+                # Run of state from i to j-1 (inclusive), in global bin coords
+                bin_start = start + i
+                bin_end = start + j - 1  # inclusive
+                if state != neutral_idx:
+                    rows.append({
+                        "cell_group": cell_group,
+                        "subcluster": np.int32(sc),
+                        "chromosome": chrom,
+                        "bin_start": int(bin_start),
+                        "bin_end": int(bin_end),
+                        "state": np.int8(state),
+                        "cn": cn_map.get(state, float("nan")),
+                    })
+                i = j
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["cell_group", "subcluster", "chromosome", "bin_start", "bin_end", "state", "cn"]
+        )
+
+    df = pd.DataFrame(rows)
+    df["subcluster"] = df["subcluster"].astype(np.int32)
+    df["state"] = df["state"].astype(np.int8)
+    df["cn"] = df["cn"].astype(np.float64)
+    return df
 
 
 def _validate_reference_and_raise(
@@ -381,7 +668,26 @@ def _validate_reference_and_raise(
         The error message lists the observed categories so the caller can
         correct the typo.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    if reference_key is not None and reference_cat is not None:
+        cats = [reference_cat] if isinstance(reference_cat, str) else list(reference_cat)
+        if reference_key not in adata.obs.columns:
+            observed = list(adata.obs.columns)
+            raise ValueError(
+                f"reference_key={reference_key!r} not found in adata.obs. "
+                f"Available columns: {observed}"
+            )
+        obs_series = adata.obs[reference_key]
+        mask = obs_series.isin(cats).to_numpy().astype(bool)
+        if mask.sum() == 0:
+            observed_cats = sorted(obs_series.unique().tolist())
+            raise ValueError(
+                f"reference_cat={cats!r} matched zero cells in "
+                f"adata.obs[{reference_key!r}]. "
+                f"Observed categories: {observed_cats}"
+            )
+        return mask
+    else:
+        return is_reference_fallback.astype(bool)
 
 
 def _remap_ref_groups_to_local(
@@ -425,7 +731,36 @@ def _remap_ref_groups_to_local(
     group-iteration compatibility) but the full set returning empty is
     caught by :func:`_validate_reference_and_raise` upstream.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    if reference_key is None:
+        return None
+
+    cats = [reference_cat] if isinstance(reference_cat, str) else list(reference_cat)
+    if cats is None or len(cats) == 0:
+        return None
+
+    # Map global row index -> local ref_counts_raw row index
+    ref_positions = np.where(is_reference)[0]  # global indices of ref cells, in order
+    local_map: dict[int, int] = {int(g): i for i, g in enumerate(ref_positions)}
+
+    result: dict[str, NDArray[np.intp]] = {}
+    for cat in cats:
+        global_cells = np.where(adata.obs[reference_key].to_numpy() == cat)[0]
+        local_indices = np.array(
+            [local_map[int(g)] for g in global_cells if int(g) in local_map],
+            dtype=np.intp,
+        )
+        result[str(cat)] = local_indices
+
+    return result
+
+
+def _rss_mb() -> float | None:
+    """Return current process RSS in MB via psutil, or None if unavailable."""
+    try:
+        import psutil
+        return float(psutil.Process().memory_info().rss / (1024 * 1024))
+    except Exception:
+        return None
 
 
 def _profile_block(
@@ -438,7 +773,19 @@ def _profile_block(
     consistent profile-dict layout. Imported at call site to avoid a circular
     module dependency between pipeline.py and pipeline_phase2.py.
     """
-    raise NotImplementedError("skeleton — G2 pending")
+    if profile is None:
+        return
+    import logging
+    elapsed = time.perf_counter() - t0
+    rss_after = _rss_mb()
+    profile[name] = {
+        "wallclock_s": float(elapsed),
+        "rss_mb_before": rss_before,
+        "rss_mb_after": rss_after,
+        "rss_delta_mb": (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None,
+    }
+    _log = logging.getLogger("pyinfercnv.profile")
+    _log.info("block=%s wallclock=%.3fs rss_after=%s", name, elapsed, rss_after)
 
 
 __all__ = [
