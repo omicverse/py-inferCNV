@@ -46,6 +46,7 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["matplotlib>=3.7"]
 compare = ["hmmlearn>=0.3"]
+leiden = ["leidenalg>=0.10", "igraph>=0.11"]
 dev = [
   "pytest>=7.4",
   "pytest-xdist>=3.5",
@@ -88,3 +89,12 @@ markers = [
   "r_parity: tests depending on tests/r_out/ TSVs",
 ]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "igraph>=1.0.0",
+    "ipykernel>=7.2.0",
+    "leidenalg>=0.11.0",
+    "nbclient>=0.10.4",
+    "nbformat>=5.10.4",
+]
