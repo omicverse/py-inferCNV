@@ -591,8 +591,11 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
     except (TypeError, AttributeError, NotImplementedError) as exc:
         pytest.xfail(f"Phase 2 pipeline not yet integrated: {exc}")
 
-    if result is None or result.hmm_states is None:
-        pytest.xfail("Phase 2 pipeline not yet integrated: result.hmm_states is None")
+    # i3 path stores states in result.hmm_states_i3 (G1 P1 schema separates i6/i3).
+    if result is None or (result.hmm_states_i3 is None and result.hmm_states is None):
+        pytest.xfail(
+            "Phase 2 pipeline not yet integrated: both hmm_states_i3 and hmm_states are None"
+        )
 
     r_df = pd.read_csv(R_OUT_DIR / "step17_hmm_i3.tsv", sep="\t", index_col=0)
     r_mat = r_df.to_numpy(dtype=np.int32) - 1  # 1-based -> 0-based (0-2); genes x cells
