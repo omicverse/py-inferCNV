@@ -76,3 +76,11 @@ class InferCNVConfig:  # noqa: N801
             raise ValueError("max_centered_threshold must be > 0 or 'auto' or None")
         if not 0.0 <= self.BayesMaxPNormal <= 1.0:
             raise ValueError(f"BayesMaxPNormal must be in [0,1], got {self.BayesMaxPNormal}")
+        # G1 patch P8: strictest bound for both i6 (K=6) and i3 (K=3).
+        # Off-diagonal mass in `.get_HMM` is (K-1)*t; requiring (K-1)*t < 1
+        # for K=6 yields t < 1/5 = 0.2.
+        if self.HMM_transition_prob <= 0.0 or self.HMM_transition_prob >= 0.2:
+            raise ValueError(
+                "HMM_transition_prob must be in (0, 1/(K-1)=0.2), "
+                f"got {self.HMM_transition_prob}"
+            )
