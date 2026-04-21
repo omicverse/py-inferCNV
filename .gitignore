@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+tests/r_out/
+benchmarks/**/py_out/
+examples/*.executed.ipynb.bak
+/tmp_*
