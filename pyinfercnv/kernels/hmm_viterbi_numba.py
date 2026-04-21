@@ -6,10 +6,16 @@ Implements R `HiddenMarkov::dthmm` / `Viterbi.dthmm.adj` used in
 it uses a custom "peakedness score" over upper-tail p-values. See
 :func:`compute_log_emit` for the two supported variants:
 
-  * ``emission='rstyle'`` (default) — bit-exact replica of R
-    ``Viterbi.dthmm.adj`` (``inferCNV_HMM.R:1122-1162``) including the
-    ``object$pm$sd <- median(object$pm$sd)`` override on line 1122.
-    Selected by i3/i6 callers for R-parity.
+  * ``emission='rstyle'`` (default) — numerically matches R
+    ``Viterbi.dthmm.adj`` (``inferCNV_HMM.R:1122-1162``) within the
+    audited tolerance (``max |log_emit_py - log_emit_R| < 1e-12`` on
+    the synthetic fixture in ``tests/unit/test_kernels_viterbi_adj.py``).
+    Replicates the ``object$pm$sd <- median(object$pm$sd)`` override
+    on line 1122. Residual element-wise drift up to ~1e-14 is expected
+    because R's ``pnorm(log.p=TRUE, lower.tail=FALSE)`` and SciPy's
+    ``norm.logsf`` use slightly different tail-probability expansions
+    at large ``|z|`` (codex review S2). Selected by i3/i6 callers for
+    R parity.
 
   * ``emission='gauss_std'`` — standard Gaussian log-density
     ``log N(x | mu_k, sigma_k)``. Kept for cross-validation against
@@ -54,7 +60,8 @@ def _gauss_log_emit(x: np.ndarray, mus: np.ndarray, sigmas: np.ndarray) -> np.nd
 def _rstyle_log_emit(x: np.ndarray, mus: np.ndarray, sigmas: np.ndarray) -> np.ndarray:
     """R ``Viterbi.dthmm.adj`` custom emission (inferCNV_HMM.R:1122-1162), shape (T, K).
 
-    Replicates the R formula exactly::
+    Replicates the R formula structurally (module docstring audits the
+    numerical tolerance)::
 
         object$pm$sd <- median(object$pm$sd)          # line 1122, applies uniform sd
         emission[t,k] = pnorm(|(x_t - mu_k)/sd|, log.p=TRUE, lower.tail=FALSE)

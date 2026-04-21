@@ -32,6 +32,55 @@ def test_deterministic_with_fixed_seed():
     np.testing.assert_array_equal(a, b)
 
 
+def _ambiguous_cnv_matrix(n_cells: int = 60, n_genes: int = 5,
+                          seed: int = 0) -> np.ndarray:
+    """A low-signal matrix where Leiden's starting state genuinely
+    matters — no clear cluster structure, so different seeds can
+    converge to different local optima. Used to exercise the RNG path
+    that the per-call ``random_state`` is supposed to drive. Matches
+    codex's probe geometry (60 × 5, ``resolution=0.5``).
+    """
+    rng = np.random.default_rng(seed)
+    return rng.normal(loc=0.0, scale=1.0, size=(n_cells, n_genes)).astype(np.float32)
+
+
+def test_seed_is_reproducible_on_ambiguous_graph():
+    """Same seed, same run — must return identical labels even when
+    Leiden has genuine choice to make. Regression for the bug codex
+    caught where ``random_state`` was silently dropped after the switch
+    to ``python-igraph``."""
+    X = _ambiguous_cnv_matrix()
+    a = leiden_subcluster(X, resolution=0.5, k_nn=10, random_state=123)
+    b = leiden_subcluster(X, resolution=0.5, k_nn=10, random_state=123)
+    np.testing.assert_array_equal(a, b)
+
+
+def test_seed_actually_threads_through_to_leiden():
+    """At least two different seeds on the ambiguous fixture produce
+    DIFFERENT partitions. If this ever starts passing trivially with
+    the seed fix deleted, it means igraph's module-global RNG is no
+    longer reachable and the ``random_state`` kwarg has been silently
+    disconnected again (codex's CRITICAL finding)."""
+    X = _ambiguous_cnv_matrix()
+    partitions = [
+        leiden_subcluster(X, resolution=0.5, k_nn=10, random_state=seed)
+        for seed in (1, 2, 3, 4, 5, 6)
+    ]
+    # Heuristic: at least one pair must differ. Codex saw ARI
+    # 0.6906 to 1.0 across six runs on the exact same geometry, so
+    # on average many pairs differ; we only need one to prove wire-up.
+    some_differ = any(
+        not np.array_equal(partitions[i], partitions[j])
+        for i in range(len(partitions))
+        for j in range(i + 1, len(partitions))
+    )
+    assert some_differ, (
+        "All six seeds produced identical partitions on the ambiguous "
+        "60×5 fixture — the random_state kwarg is probably not reaching "
+        "igraph's global RNG."
+    )
+
+
 def test_auto_resolution_runs():
     X = _synthetic_cnv_matrix(100)
     labels = leiden_subcluster(X, resolution="auto", k_nn=15, random_state=0)

@@ -92,8 +92,13 @@ Matrix layout
 * ``cnv_matrix`` input: ``(n_cells, n_bins)`` float32 C-order (from
   :attr:`InferCNVResult.cnv_matrix`, the log2-FC smoothed/centered matrix).
 * ``hmm_states`` / ``hmm_states_i3`` output: ``(n_cells, n_bins)`` int8.
-* ``subclusters`` output: ``(n_cells,)`` int32, ``-1`` for reference cells
-  (R drops refs from subclustering; we signal the same via sentinel).
+* ``subclusters`` output: ``(n_cells,)`` int32. When
+  ``config.cluster_by_groups=True`` (default, R parity) every cell has a
+  non-negative subcluster id; reference cells receive their own group's
+  subcluster ids just like tumor cells. When
+  ``config.cluster_by_groups=False`` the legacy behaviour kicks in:
+  non-ref cells get 0..K-1 and reference cells receive the ``-1``
+  sentinel.
 * ``cnv_regions`` output: long-format pandas DataFrame; one row per
   non-neutral state run, columns
   ``[cell_group, subcluster, chromosome, bin_start, bin_end, state, cn]``.

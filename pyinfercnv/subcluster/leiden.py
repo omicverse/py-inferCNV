@@ -43,21 +43,38 @@ the OR of the two directed-KNN half-edges. Self-loops from the diagonal
 are discarded because the undirected graph drops diagonal entries. This
 is *strictly more edges* than a pure upper-triangle reading.
 
-We replicate exactly:
+We match the R path's **off-diagonal** semantics; the two graphs are
+not guaranteed to be vertex-for-vertex identical (see known deviations
+below):
   1. ``sklearn.neighbors.NearestNeighbors(algorithm='brute', metric='euclidean')``
      gives the same euclidean KNN as ``RANN::nn2`` up to tie-break.
   2. Undirected edge set = ``{(min(i,j), max(i,j)) : j in KNN(i), i != j}``
-     — i.e., the OR of both directed-KNN half-edges. No weights.
+     — the OR of both directed-KNN half-edges. No weights.
+     **Self-loops omitted**. R ``nn2`` returns self as the first neighbour
+     and R's ``graph_from_adjacency_matrix(mode="undirected")`` keeps the
+     diagonal as self-loops. Empirically (brute-forced 967 small random
+     graphs in the codex review, see
+     ``docs/superpowers/reviews/phase2-i3-fix-codex.md`` S1) those
+     self-loops do not change Leiden membership, but the graphs differ.
   3. ``igraph.Graph(n=n_cells, edges=edges, directed=False)`` then call
      ``g.community_leiden(objective_function='CPM',
                           resolution=resolution, n_iterations=-1)``.
+     Seeded via ``ig.set_random_number_generator(random.Random(random_state))``
+     with a finally-block restore to the default PCG32 so the global
+     RNG state does not leak into other callers.
 
 Known sources of deviation from R on this path:
   * ``nn2`` uses the ANN C++ library (approximate NN, tie-break via
     insertion order). sklearn's brute-force is exact euclidean and
     breaks ties by index. For well-separated points the two agree; at
-    equidistant cells tie-break may differ. On the oligo fixture this
-    is below the ARI ≥ 0.95 floor.
+    equidistant cells tie-break may differ.
+  * Self-loops omitted (see above).
+  * Different PRNG backends under the hood: R igraph uses the bundled
+    C PCG32; python-igraph with a ``random.Random`` override dispatches
+    through Python's Mersenne-Twister. Leiden's internal seed-usage
+    should be limited to node shuffling so the impact is bounded, but
+    this is the mechanism why two cross-language runs at the same
+    ``random_state`` are not bit-identical.
 """
 from __future__ import annotations
 
@@ -142,11 +159,22 @@ def leiden_subcluster(
 
     # community_leiden wraps the same C core as R's cluster_leiden.
     # n_iterations=-1 runs until convergence (R default).
-    partition = g.community_leiden(
-        objective_function="CPM",
-        resolution=used_resolution,
-        n_iterations=-1,
-        weights=None,
-    )
+    #
+    # Seed control: python-igraph's community_leiden does not accept a
+    # random_state kwarg; to make ``random_state`` actually thread into
+    # Leiden we must set igraph's *module-global* RNG. Restore the
+    # default PCG32 in a finally block so we do not pollute other
+    # callers in the same process.
+    import random as _random
+    ig.set_random_number_generator(_random.Random(random_state))
+    try:
+        partition = g.community_leiden(
+            objective_function="CPM",
+            resolution=used_resolution,
+            n_iterations=-1,
+            weights=None,
+        )
+    finally:
+        ig.set_random_number_generator(None)  # restore C-layer PCG32
     labels = np.asarray(partition.membership, dtype=np.int32)
     return labels

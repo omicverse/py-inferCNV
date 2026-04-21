@@ -1,13 +1,17 @@
-"""Bit-exact parity of py ``compute_log_emit(..., emission='rstyle')`` vs
-R ``Viterbi.dthmm.adj`` (inferCNV_HMM.R:1101-1175).
+"""Audited-tolerance parity of py ``compute_log_emit(..., emission='rstyle')``
+vs R ``Viterbi.dthmm.adj`` (inferCNV_HMM.R:1101-1175).
 
 Evidence produced by ``scripts/triage_i3/triage_r_viterbi.R`` — the R-side
 synthetic dump lives under ``scripts/triage_i3/r_dump/``. If the TSVs are
 absent the test skips (local R not required for CI).
 
-Three assertions:
-  1. py R-style log_emit matches R emissions TSV to 1e-12 per cell.
-  2. py R-style Viterbi path matches R path exactly.
+Assertions:
+  1. py R-style log_emit matches R emissions TSV to ``1e-12`` element-wise
+     (codex review S2: scipy.stats.norm.logsf vs R pnorm can drift up to
+     ~1e-14 on large ``|z|``; ``1e-12`` is the audited ceiling and also
+     comfortably below any argmax-flipping threshold).
+  2. py R-style Viterbi path matches R path exactly on the synthetic
+     fixture (argmax dominates over emission residuals).
   3. py standard-Gaussian log_emit is DIFFERENT from R emissions (proves
      the two emission modes genuinely disagree, so the 'rstyle' claim
      is meaningful).
@@ -52,8 +56,10 @@ def _load_r_dump():
     return x, mus, sigmas, trans, delta, r_emissions, r_path
 
 
-def test_rstyle_log_emit_matches_r_bit_exact():
-    """compute_log_emit(emission='rstyle') == R emissions (max diff < 1e-12)."""
+def test_rstyle_log_emit_matches_r_within_tolerance():
+    """compute_log_emit(emission='rstyle') ≈ R emissions within 1e-12
+    element-wise. Not bit-exact — scipy.stats.norm.logsf vs R pnorm
+    diverge by up to ~1e-14 at large |z|; 1e-12 is the audited ceiling."""
     x, mus, sigmas, _, _, r_emissions, _ = _load_r_dump()
     py_log_emit = compute_log_emit(x, mus, sigmas, emission="rstyle")
     assert py_log_emit.shape == r_emissions.shape
