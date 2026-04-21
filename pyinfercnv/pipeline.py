@@ -1,0 +1,278 @@
+"""Top-level infercnv() — Phase 1 orchestration of R steps 1-14 + 16.
+
+R-parity step mapping:
+    1.  Incoming data                   -> extract_counts + adata.var join
+    2.  Remove lowly expressed genes    -> preprocess.filter_low_expression_genes
+        (chr_exclude applied here too: drop chrX/Y/M genes)
+    3.  Normalize by seq depth          -> preprocess.normalize_by_seq_depth
+    4.  log2(x+1)                       -> preprocess.log2_plus1
+    5.  (skipped; scale_data default False)
+    6.  (skipped; num_ref_groups not set)
+    7.  (skipped; tumor subclustering Phase 2)
+    8.  Subtract ref mean (pre-smooth)  -> preprocess.subtract_reference
+        (use_bounds per config; default TRUE)
+    9.  Max-centered threshold          -> preprocess.apply_max_centered_threshold
+    10. Smooth per chromosome           -> smooth.smooth_pyramidinal per chr
+    11. Center cells (median)           -> center.center_cells
+    12. Subtract ref mean (post-smooth) -> preprocess.subtract_reference (2nd)
+    14. invert_log2                     -> preprocess.invert_log2
+    16. Prune outliers                  -> cna.prune_outliers (when enabled)
+
+G1 patches applied:
+    P2  -- ref_counts_raw captured BEFORE normalize for Phase 2 hspike
+           calibration; threaded into InferCNVResult.
+    P6  -- TODO: per-chromosome chunked densify. Current implementation
+           densifies once at step 8 (acceptable for <50k cells; spec
+           noted as Phase 1.5 optimisation).
+    P11 -- psutil profile hooks per major block, written to
+           InferCNVResult.profile dict.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import pandas as pd
+from scipy import sparse as sp
+
+from pyinfercnv.center import center_cells
+from pyinfercnv.cna import prune_outliers
+from pyinfercnv.config import InferCNVConfig
+from pyinfercnv.io.h5ad import extract_counts
+from pyinfercnv.preprocess import (
+    apply_max_centered_threshold,
+    filter_low_expression_genes,
+    invert_log2,
+    log2_plus1,
+    normalize_by_seq_depth,
+    subtract_reference,
+)
+from pyinfercnv.result import InferCNVResult
+from pyinfercnv.smooth import smooth_pyramidinal
+
+if TYPE_CHECKING:
+    from anndata import AnnData
+
+
+_PROFILE_LOG = logging.getLogger("pyinfercnv.profile")
+
+
+def _rss_mb() -> float | None:
+    """Return current process RSS in MB via psutil, or None if not installed."""
+    try:
+        import psutil
+        return float(psutil.Process().memory_info().rss / (1024 * 1024))
+    except Exception:
+        return None
+
+
+def _profile_block(profile: dict[str, dict[str, Any]], name: str, t0: float, rss_before: float | None) -> None:
+    elapsed = time.perf_counter() - t0
+    rss_after = _rss_mb()
+    profile[name] = {
+        "wallclock_s": float(elapsed),
+        "rss_mb_before": rss_before,
+        "rss_mb_after": rss_after,
+        "rss_delta_mb": (rss_after - rss_before) if (rss_after is not None and rss_before is not None) else None,
+    }
+    _PROFILE_LOG.info("block=%s wallclock=%.3fs rss_after=%s", name, elapsed, rss_after)
+
+
+def _build_chromosome_layout(
+    var_df: pd.DataFrame, exclude_chromosomes: Sequence[str]
+) -> tuple[dict[str, int], np.ndarray]:
+    """Return (chr_pos, gene_perm) — chromosome -> start col idx + permutation
+    that sorts genes by chromosome (natural order) then start position."""
+    if "chromosome" not in var_df.columns:
+        raise ValueError(
+            "adata.var must have 'chromosome' column. Use io.genome.load_gene_positions "
+            "and merge into adata.var first."
+        )
+    mask = var_df["chromosome"].notna() & ~var_df["chromosome"].isin(exclude_chromosomes)
+    kept = var_df[mask].copy()
+
+    def _chr_key(c: str) -> tuple:
+        s = c.replace("chr", "")
+        try:
+            return (0, int(s))
+        except ValueError:
+            return (1, s)
+
+    sorted_chroms = sorted(kept["chromosome"].unique(), key=_chr_key)
+    out_idx: list = []
+    chr_pos: dict[str, int] = {}
+    running = 0
+    for c in sorted_chroms:
+        sub = kept[kept["chromosome"] == c]
+        if "start" in sub.columns:
+            sub = sub.sort_values("start")
+        chr_pos[c] = running
+        out_idx.extend(sub.index.tolist())
+        running += len(sub)
+
+    gene_perm = var_df.index.get_indexer(out_idx)
+    return chr_pos, gene_perm
+
+
+def infercnv(
+    adata: "AnnData",
+    *,
+    config: InferCNVConfig | None = None,
+    reference_key: str | None = None,
+    reference_cat: str | Sequence[str] | None = None,
+    exclude_chromosomes: Sequence[str] | None = None,
+    key_added: str = "cnv",
+    inplace: bool = True,
+) -> InferCNVResult | None:
+    """Phase 1 end-to-end pipeline. Returns InferCNVResult or writes into adata."""
+    cfg = config or InferCNVConfig()
+    cfg.validate()
+    excl = tuple(exclude_chromosomes) if exclude_chromosomes is not None else cfg.chr_exclude
+    profile: dict[str, dict[str, Any]] = {}
+
+    # Step 1 — extract counts (CSR float32)
+    rss0 = _rss_mb()
+    t0 = time.perf_counter()
+    X = extract_counts(adata, counts_layer=cfg.counts_layer)
+    _profile_block(profile, "01_extract", t0, rss0)
+
+    # Identify reference cells
+    if reference_key is None or reference_cat is None:
+        ref_idx_all = np.arange(adata.n_obs)
+    else:
+        cats = [reference_cat] if isinstance(reference_cat, str) else list(reference_cat)
+        ref_idx_all = np.where(adata.obs[reference_key].isin(cats).to_numpy())[0]
+
+    # G1 P2 — capture ref_counts_raw BEFORE normalize/log
+    t0 = time.perf_counter(); rss = _rss_mb()
+    if len(ref_idx_all) > 0:
+        ref_counts_raw = (
+            X[ref_idx_all, :].toarray().astype(np.float32) if sp.issparse(X)
+            else np.asarray(X[ref_idx_all, :], dtype=np.float32)
+        )
+    else:
+        ref_counts_raw = None
+    _profile_block(profile, "02_capture_ref_raw", t0, rss)
+
+    # Step 2 — filter genes (mean cutoff + min cells)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    keep = filter_low_expression_genes(
+        X, cutoff=cfg.cutoff, min_cells_per_gene=cfg.min_cells_per_gene,
+        reference_cell_idx=ref_idx_all if len(ref_idx_all) > 0 else None,
+    )
+    X = X[:, keep] if sp.issparse(X) else X[:, keep]
+    var_kept = adata.var.iloc[np.where(keep)[0]].copy()
+    if ref_counts_raw is not None:
+        ref_counts_raw = ref_counts_raw[:, keep]
+    _profile_block(profile, "03_filter_genes", t0, rss)
+
+    # Step 3 — normalize by seq depth
+    t0 = time.perf_counter(); rss = _rss_mb()
+    X = normalize_by_seq_depth(X)
+    _profile_block(profile, "04_normalize", t0, rss)
+
+    # Step 4 — log2(x+1)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    X = log2_plus1(X)
+    _profile_block(profile, "05_log2", t0, rss)
+
+    # Build chromosome layout (also drops chr_exclude genes)
+    chr_pos, gene_perm_local = _build_chromosome_layout(var_kept, excl)
+    if sp.issparse(X):
+        X = X.tocsc()[:, gene_perm_local].tocsr()
+    else:
+        X = X[:, gene_perm_local]
+    if ref_counts_raw is not None:
+        ref_counts_raw = ref_counts_raw[:, gene_perm_local]
+
+    # Densify (Phase 1: full matrix; Phase 1.5 will move to per-chrom chunks)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    X_dense = X.toarray().astype(np.float32) if sp.issparse(X) else np.ascontiguousarray(X, dtype=np.float32)
+    _profile_block(profile, "06_densify", t0, rss)
+
+    # Reference groups
+    if reference_key is None or reference_cat is None or len(ref_idx_all) == 0:
+        ref_groups: dict[str, list[int]] = {"proxyNormal": list(range(X_dense.shape[0]))}
+    else:
+        cats = [reference_cat] if isinstance(reference_cat, str) else list(reference_cat)
+        ref_groups = {
+            str(c): np.where(adata.obs[reference_key].to_numpy() == c)[0].tolist()
+            for c in cats
+        }
+
+    # Step 8 — subtract ref (1st pass, bounded if K>1)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    X_dense = subtract_reference(X_dense, ref_groups=ref_groups, use_bounds=cfg.ref_subtract_use_mean_bounds)
+    _profile_block(profile, "07_subtract_ref_1", t0, rss)
+
+    # Step 9 — max-centered threshold clip
+    t0 = time.perf_counter(); rss = _rss_mb()
+    X_dense = apply_max_centered_threshold(X_dense, threshold=cfg.max_centered_threshold)
+    _profile_block(profile, "08_max_threshold", t0, rss)
+
+    # Step 10 — smooth per chromosome
+    t0 = time.perf_counter(); rss = _rss_mb()
+    smoothed = np.empty_like(X_dense)
+    chroms = list(chr_pos.keys())
+    for i, c in enumerate(chroms):
+        start = chr_pos[c]
+        end = chr_pos[chroms[i + 1]] if i + 1 < len(chroms) else X_dense.shape[1]
+        if end - start >= 2:
+            smoothed[:, start:end] = smooth_pyramidinal(X_dense[:, start:end], window_length=cfg.window_length)
+        else:
+            smoothed[:, start:end] = X_dense[:, start:end]
+    _profile_block(profile, "09_smooth", t0, rss)
+
+    # Step 11 — center cells (median)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    smoothed = center_cells(smoothed, method="median")
+    _profile_block(profile, "10_center", t0, rss)
+
+    # Step 12 — subtract ref (2nd pass)
+    t0 = time.perf_counter(); rss = _rss_mb()
+    smoothed = subtract_reference(smoothed, ref_groups=ref_groups, use_bounds=cfg.ref_subtract_use_mean_bounds)
+    _profile_block(profile, "11_subtract_ref_2", t0, rss)
+
+    # Step 14 — invert log2 -> linear FC
+    t0 = time.perf_counter(); rss = _rss_mb()
+    cnv_fc = invert_log2(smoothed)
+    _profile_block(profile, "12_invert_log2", t0, rss)
+
+    # Step 16 — prune outliers (optional, controlled by config)
+    if cfg.prune_outliers:
+        t0 = time.perf_counter(); rss = _rss_mb()
+        smoothed = prune_outliers(
+            smoothed,
+            method=cfg.outlier_method_bound,
+            lower_bound=cfg.outlier_lower_bound,
+            upper_bound=cfg.outlier_upper_bound,
+        )
+        cnv_fc = prune_outliers(
+            cnv_fc,
+            method=cfg.outlier_method_bound,
+            lower_bound=cfg.outlier_lower_bound,
+            upper_bound=cfg.outlier_upper_bound,
+        )
+        _profile_block(profile, "13_outlier_prune", t0, rss)
+
+    # Build result
+    is_ref = np.zeros(adata.n_obs, dtype=bool)
+    is_ref[ref_idx_all] = True
+    cell_meta = pd.DataFrame({"is_reference": is_ref}, index=adata.obs_names)
+
+    result = InferCNVResult(
+        chr_pos=chr_pos,
+        cnv_matrix=smoothed.astype(np.float32),
+        cnv_matrix_fc=cnv_fc.astype(np.float32),
+        cell_meta=cell_meta,
+        ref_counts_raw=ref_counts_raw,
+        profile=profile,
+    )
+
+    if inplace:
+        result.write_to_anndata(adata, key_added=key_added)
+        return None
+    return result
