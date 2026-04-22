@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (post-v0.2.0.dev1)
+
+### Track A — py = R Leiden fidelity closeout
+
+Three-patient diagnostic (DCIS1/TNBC1/TNBC3) establishes that py and
+R Leiden are statistically equivalent in distribution and that py
+finds equal-or-higher CPM objective on the same graph. The HANDOFF
+v5/v6 "DCIS1 ARI 0.447 divergence" was a single-draw observation
+inside R's own 0.10-0.29 self-noise floor. Full data + methodology
+under `benchmarks/phase2/Gao2021_Breast/track_a_summary.md` and
+`docs/superpowers/reviews/track-a-closeout-codex.md`.
+
+### Added
+
+- `InferCNVConfig.tumor_subcluster_n_seeds` (default 1) — opt-in
+  `rbest` mode that runs Leiden N times and picks the partition with
+  the highest CPM. KNN graph reused across seeds so incremental cost
+  is Leiden-only.
+- `InferCNVConfig.tumor_subcluster_min_size` (default None) — opt-in
+  small-cluster merge via KNN majority vote; documented non-CPM-optimal.
+- `leiden_subcluster` new `n_jobs` kwarg (default `-1`): parallelises
+  the brute-force euclidean KNN over all cores (codex G3 Track C).
+- User warning when `leiden_subcluster` is called with `n_cells >= 8000`
+  about exact-brute quadratic scaling.
+- 12 regression anchor tests (KNN backend equivalence, float32↔float64
+  label invariance, label coverage, canonical manual CPM,
+  min_subcluster_size correctness, n_seeds rbest dominance + determinism).
+
+### Changed
+
+- `InferCNVConfig.validate()` now errors on `analysis_mode != "subclusters"`;
+  `"samples"` and `"cells"` are Phase 3 work and were previously silently
+  accepted.
+- README Parity-status (Phase 2) rewritten to cite the three-patient
+  Track A distribution data instead of a single DCIS1 run.
+- `pipeline_phase2.py` docstring: removed stale "future field in Phase 2"
+  language for `tumor_subcluster_partition_method`; now lists the three
+  new subcluster knobs.
+
+### Notes
+
+- No `twine upload` authorization granted yet. Tags `v0.2.0.dev0` and
+  `v0.2.0.dev1` remain immutable. Tag `v0.2.0.dev2` is **not** created
+  automatically; Jason bumps when ready.
+- Pure-Python wheel invariant preserved: `python -m build` emits
+  `py3-none-any.whl` with zero `.so`/`.pyd`/`.dylib`. Twine check passes
+  on both wheel and sdist.
+
 ## 0.2.0.dev1 (unreleased)
 
 ### Performance

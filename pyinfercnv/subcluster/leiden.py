@@ -199,6 +199,7 @@ def leiden_subcluster(
     random_state: int = 0,
     n_seeds: int = 1,
     min_subcluster_size: int | None = None,
+    n_jobs: int = -1,
 ) -> np.ndarray:
     """Return per-cell int32 subcluster label, shape (n_cells,).
 
@@ -225,6 +226,12 @@ def leiden_subcluster(
         nearest non-small cluster via KNN majority vote. Default
         ``None`` (off). **Non-CPM-optimal by design** — trades a small
         CPM loss for downstream stability.
+    n_jobs
+        Passed to ``sklearn.neighbors.NearestNeighbors`` for the
+        euclidean brute-force KNN. ``-1`` uses all available cores
+        (default); ``1`` disables parallelism for deterministic
+        ordering in single-threaded CI. The KNN computation is the
+        dominant cost for n_cells ≳ 1k (codex G3 Track C review).
     """
     X = np.ascontiguousarray(cnv_matrix, dtype=np.float32)
     if X.ndim != 2:
@@ -243,6 +250,21 @@ def leiden_subcluster(
         return np.zeros(n_cells, dtype=np.int32)
     if k_nn >= n_cells:
         return np.zeros(n_cells, dtype=np.int32)
+
+    # Codex G3 Track C Q2: exact brute KNN becomes painful at n >~ 8k
+    # (roughly 35s at n=10k scaling quadratically from our measured
+    # 0.43s at n=1101 on d=9237). We don't auto-switch to approximate
+    # KNN because that would silently break parity; we warn instead.
+    if n_cells >= 8_000:
+        import warnings
+        warnings.warn(
+            f"leiden_subcluster: exact brute KNN on n_cells={n_cells} may "
+            "dominate runtime (O(n²·d)). Downsampling to <8k tumour cells "
+            "or implementing an opt-in approximate-KNN flag are the usual "
+            "next steps. Tracked in docs/superpowers/reviews/track-c-perf-codex.md.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Resolve auto resolution (R line 588)
     if isinstance(resolution, str):
@@ -263,11 +285,25 @@ def leiden_subcluster(
     from sklearn.neighbors import NearestNeighbors
 
     # ---- 1. KNN on raw CNV matrix (mirrors R nn2) ----
-    nn = NearestNeighbors(n_neighbors=k_nn, algorithm="brute", metric="euclidean")
+    # algorithm='brute' + metric='euclidean' for deterministic exact NN.
+    # n_jobs parallelises the distance computation (sklearn internally
+    # splits rows across workers); ordering is preserved.
+    # Codex G3 Track C recommendation: keep brute exact for parity,
+    # parallelise the dominant cost.
+    nn = NearestNeighbors(
+        n_neighbors=k_nn,
+        algorithm="brute",
+        metric="euclidean",
+        n_jobs=n_jobs,
+    )
     nn.fit(X)
     idx = nn.kneighbors(X, return_distance=False)
 
     # ---- 2. Symmetric undirected edge set (mode="max" semantics) ----
+    # R `graph_from_adjacency_matrix(mode="undirected")` -> `mode="max"`:
+    # undirected edge (i, j), i != j, exists iff j is in KNN(i) or i is in
+    # KNN(j). Sort each pair (min, max) and dedupe via np.unique on an
+    # int64 key; self-loops dropped (Track A3 showed no effect on Leiden).
     row_idx = np.repeat(np.arange(n_cells, dtype=np.int64), k_nn)
     col_idx = idx.reshape(-1).astype(np.int64)
     non_self = row_idx != col_idx
