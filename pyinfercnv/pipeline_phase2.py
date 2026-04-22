@@ -182,14 +182,22 @@ def run_phase2(
         default "leiden" via helper), ``analysis_mode``, ``cutoff``,
         ``window_length`` (for hspike replay), plus the preprocess knobs.
     reference_key, reference_cat
-        Required when ``config.HMM_type == "i6"``: they drive the global->
-        ref-local index remap via :func:`_remap_ref_groups_to_local` (G2
-        Q10). When ``config.HMM_type == "i3"``, also used by
-        :func:`_validate_reference_and_raise` to enforce Phase 1 G3 Q6
-        defensive. When ``None`` for the i6 path and the reference pool is
-        non-empty, the module falls back to a single-group
-        ``'normalsToUse'`` bundle over all reference cells (R's
-        reference-less branch in ``inferCNV_hidden_spike.R:19-26``).
+        **Optional in all modes.** When supplied and both
+        ``cluster_by_groups=True`` and ``HMM_type=="i6"``, the pair drives
+        the global -> ref-local index remap via
+        :func:`_remap_ref_groups_to_local` (G2 Q10), so each annotation
+        category maps to its own hspike ref-group bundle. When ``None``
+        and the Phase-1 ``is_reference`` mask is non-empty, all reference
+        cells collapse into a single-group ``'normalsToUse'`` bundle over
+        the full reference pool (matches R's reference-less branch in
+        ``inferCNV_hidden_spike.R:19-26``). Either mode is supported end-
+        to-end for i6; the per-group path is preferred because it
+        matches ``infercnv::run(cluster_by_groups=TRUE, ...)`` parity.
+        For ``HMM_type=="i3"`` these kwargs are used only by
+        :func:`_validate_reference_and_raise` to enforce the Phase 1
+        G3 Q6 defensive ("supplied key with zero matches is a user bug,
+        not a silent fallback"); the i3 state parameter estimator works
+        from ``is_reference`` alone.
     random_state
         Propagated to hspike simulation and any stochastic subcluster
         backend (leiden / random_trees; qnorm is deterministic).

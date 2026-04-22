@@ -2,7 +2,7 @@
 
 Pure-Python re-implementation of [inferCNV](https://github.com/broadinstitute/inferCNV) (Broad Institute) — single-cell CNV inference from scRNA-seq, AnnData-native, R-parity-audited.
 
-**Status:** v0.1.0.dev0 — **Phase 1** (preprocess → smooth → invert_log2 → outlier prune) is functionally complete and R-parity-validated. Phase 2 (HMM + tumor subclustering) and Phase 3 (BayesNet MCMC + denoise) are not yet implemented.
+**Status:** v0.2.0.dev0 — **Phase 2** (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions) complete and R-parity-validated on the smart-seq2 oligodendroglioma fixture (ARI 1.000, Jaccard 0.976/0.968). A 17-patient 3CA 10x UMI cross-cohort benchmark is in progress under `scripts/phase2_benchmark/`; final numbers will ship with 0.2.0.dev1. Phase 3 (BayesNet MCMC + denoise) is not yet implemented.
 
 ## Installation
 
@@ -55,20 +55,25 @@ R-parity verified against R `infercnv` pipeline's per-step intermediate TSV dump
 from `tests/r_reference.R` on the bundled `oligodendroglioma_expression_downsampled`
 fixture (184 cells × 8508 genes after filter).
 
-| R step | Python module | Tier | Measured `max_diff` |
+| R step | Python module | Tier | Test assertion |
 |---|---|---|---|
-| filter genes (mean cutoff + min cells) | `preprocess.filter_low_expression_genes` | 4 bit-exact | `< 1e-10` |
+| filter genes (mean cutoff + min cells) | `preprocess.filter_low_expression_genes` | 4 set-equality | identical gene set (not a numeric max_diff — step02 is a boolean mask, and the parity test asserts the index sets match) |
 | CPM by median libsize | `preprocess.normalize_by_seq_depth` | 4 (relaxed) | `< 1e-2` (float32 cumulative) |
 | log2(x+1) | `preprocess.log2_plus1` | 4 approximate | `< 1e-5` |
 | subtract_ref (bounded, 1st pass) | `preprocess.subtract_reference` | 4 (relaxed) | `< 1e-3` |
 | max_centered_threshold | `preprocess.apply_max_centered_threshold` | 4 approximate | `< 1e-6` |
-| smooth (pyramidinal w=101) | `smooth.smooth_pyramidinal` | 4 (relaxed) | `< 1e-3` (interior bit-exact, tail R-exact) |
+| smooth (pyramidinal w=101) | `smooth.smooth_pyramidinal` | 4 (relaxed) | `< 1e-3` combined (interior and tail measured separately in the test; the asserted bound is the whole-row `diff_full`, not a distinct interior-only bit-exact claim) |
 | per-cell median center | `center.center_cells` | 4 approximate | `< 1e-4` |
 | outlier prune (`average_bound`) | `cna.prune_outliers` | 4 approximate | `< 1e-4` |
 | invert_log2 | `preprocess.invert_log2` | 4 approximate | `< 1e-4` |
 
-"bit-exact" is used only where the test asserts `max_diff < 1e-10`. Other rows
-honestly label their empirical floor.
+"bit-exact" is used only where the test asserts `max_diff < 1e-10`. The
+filter_genes row is not numeric at all — it is a set-equality over gene
+names (the Phase 1 gene set matches R step02 exactly, verified in
+`tests/test_r_parity.py::test_step02_gene_set_matches`). The smooth row
+reports the `diff_full` bound asserted in CI; an earlier phrasing that
+claimed a separate "interior bit-exact" bound overstated what CI proves.
+Other rows honestly label their empirical floor.
 
 **Dependencies are not bit-exact on normalize step** due to float32 vs float64 — spec §6.3
 mandates CSR float32 I/O for memory efficiency, which accrues ~1e-2 drift over 8508
@@ -95,6 +100,19 @@ from stochastic drift at spec boundaries. See `tests/test_r_parity.py` for
 the per-assert rationale comments, and
 `docs/superpowers/findings/2026-04-21-i3-triage-findings.md` §(2) for the
 kernel-isolation diagnostic derivation.
+
+**Scope of the Phase 2 numbers above.** The fixture is smart-seq2
+(oligodendroglioma downsampled, 184 cells). The R vs Python comparison
+uses `cutoff=1`, `leiden_method="simple"`, and `leiden_function="CPM"` so
+both sides go through the `python-igraph.community_leiden` C core — the R
+default `leiden_method="PCA"` depends on Seurat SNN + irlba and has no
+Python equivalent. For 10x Genomics UMI data the wiki-canonical setting
+is `cutoff=0.1`; the cross-cohort benchmark driver in
+`scripts/phase2_benchmark/` sets that automatically. Known R upstream
+issue: `infercnv::run(HMM_type="i6", ...)` can crash during hspike
+`rowMeans` on UMI fixtures with very small reference groups — the 3CA
+benchmark falls back to i3-only parity metrics on those patients. This
+is a limitation of the R side, not pyinfercnv.
 
 Full crosswalk in [NAMESPACE_PARITY.md](NAMESPACE_PARITY.md).
 
