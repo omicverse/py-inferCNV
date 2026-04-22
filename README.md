@@ -75,6 +75,27 @@ mandates CSR float32 I/O for memory efficiency, which accrues ~1e-2 drift over 8
 genes × 184 cells. R uses float64 throughout; the tradeoff is documented and the
 relaxed threshold is the empirical floor.
 
+## Parity status (Phase 2)
+
+Phase 2 adds tumor subclustering (leiden), HMM state calls (i3 / i6), and
+hspike calibration. Measurements on the same oligodendroglioma fixture:
+
+| R step | Python module | Tier | Measurement |
+|---|---|---|---|
+| `define_signif_tumor_subclusters` (leiden path) | `subcluster.leiden.leiden_subcluster` | 3.5 empirical | ARI `1.000` vs R step15, exceeds spec §5.2 target `0.85` |
+| `predict_CNV_via_HMM_wrapper` (i3, deterministic) | `hmm.predict_i3` + `pipeline_phase2.run_phase2` | 3.5 empirical | Jaccard `0.976` vs R step17, exceeds spec §5.2 target `0.95` |
+| `predict_CNV_via_HMM_wrapper` (i6 + hspike) | `hmm.predict_i6` + `hmm.hspike.calibrate_i6_emission` | 3.5 empirical | Jaccard `0.968` vs R step17, exceeds spec §5.2 target `0.95` |
+| Viterbi.dthmm.adj kernel (diagnostic, R-aligned input) | `kernels.hmm_viterbi_numba` | kernel-isolated parity | Jaccard `0.9999` with R's own step15+step16 feeding the py kernel |
+
+"3.5 empirical" means a floor-based assertion on categorical state agreement
+(ARI / per-cell Jaccard), not a continuous `max_diff < 1e-6` claim. CI floors
+are `0.85 / 0.90 / 0.90` respectively — deliberately below the spec targets
+so that a true regression below the observed numbers can be distinguished
+from stochastic drift at spec boundaries. See `tests/test_r_parity.py` for
+the per-assert rationale comments, and
+`docs/superpowers/findings/2026-04-21-i3-triage-findings.md` §(2) for the
+kernel-isolation diagnostic derivation.
+
 Full crosswalk in [NAMESPACE_PARITY.md](NAMESPACE_PARITY.md).
 
 ## Testing
