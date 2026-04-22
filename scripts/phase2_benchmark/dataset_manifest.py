@@ -1,6 +1,8 @@
-"""17-patient benchmark manifest. Mirrors pycopykat/scripts/run_all_benchmarks.py
-DATASETS list — keeps identical (cancer, sample) population so phase2 parity
-numbers can be read alongside pycopykat's 17-patient copykat benchmark.
+"""Patient manifest for the py-vs-R wallclock + regression harness.
+Mirrors pycopykat/scripts/run_all_benchmarks.py DATASETS list so py-vs-R
+wallclock ratios can be compared side-by-side with pycopykat's
+copykat-accelerator benchmark numbers. This is NOT a real-world
+correctness benchmark — see `__init__.py` for scope.
 
 Reference-group policy for R infercnv (`ref_group_names`):
     observation = "Malignant"

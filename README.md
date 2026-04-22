@@ -2,7 +2,7 @@
 
 Pure-Python re-implementation of [inferCNV](https://github.com/broadinstitute/inferCNV) (Broad Institute) — single-cell CNV inference from scRNA-seq, AnnData-native, R-parity-audited.
 
-**Status:** v0.2.0.dev0 — **Phase 2** (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions) complete and R-parity-validated on the smart-seq2 oligodendroglioma fixture (ARI 1.000, Jaccard 0.976/0.968). A 17-patient 3CA 10x UMI cross-cohort benchmark is in progress under `scripts/phase2_benchmark/`; final numbers will ship with 0.2.0.dev1. Phase 3 (BayesNet MCMC + denoise) is not yet implemented.
+**Status:** v0.2.0.dev2 — **Phase 2** (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions) complete and R-parity-validated on the smart-seq2 oligodendroglioma fixture (ARI 1.000, Jaccard 0.976/0.968 vs R infercnv). **pyinfercnv is a Python-accelerated re-implementation of R infercnv**; parity numbers come from the R package's own bundled test fixture. Early wallclock evidence on 1–1.4 kilocell 10x UMI inputs: **25–192× py-vs-R speedup** (see `scripts/phase2_benchmark/` — a py-vs-R wallclock + regression-detection suite, not a real-world correctness benchmark). Phase 3 (BayesNet MCMC + denoise) is not yet implemented.
 
 ## Installation
 
@@ -102,17 +102,26 @@ the per-assert rationale comments, and
 kernel-isolation diagnostic derivation.
 
 **Scope of the Phase 2 numbers above.** The fixture is smart-seq2
-(oligodendroglioma downsampled, 184 cells). The R vs Python comparison
-uses `cutoff=1`, `leiden_method="simple"`, and `leiden_function="CPM"` so
-both sides go through the `python-igraph.community_leiden` C core — the R
-default `leiden_method="PCA"` depends on Seurat SNN + irlba and has no
-Python equivalent. For 10x Genomics UMI data the wiki-canonical setting
-is `cutoff=0.1`; the cross-cohort benchmark driver in
-`scripts/phase2_benchmark/` sets that automatically. Known R upstream
-issue: `infercnv::run(HMM_type="i6", ...)` can crash during hspike
-`rowMeans` on UMI fixtures with very small reference groups — the 3CA
-benchmark falls back to i3-only parity metrics on those patients. This
-is a limitation of the R side, not pyinfercnv.
+(oligodendroglioma downsampled, 184 cells) — R infercnv's own built-in
+test fixture. The R vs Python comparison uses `cutoff=1`,
+`leiden_method="simple"`, and `leiden_function="CPM"` so both sides go
+through the `python-igraph.community_leiden` C core — the R default
+`leiden_method="PCA"` depends on Seurat SNN + irlba and has no Python
+equivalent. For 10x Genomics UMI data the wiki-canonical setting is
+`cutoff=0.1`.
+
+**What this project is.** pyinfercnv reproduces (most of) R infercnv's
+algorithm in pure Python for runtime speedup. Parity is measured only
+against R infercnv's own fixtures where both pipelines are known to be
+well-behaved. We do not claim correctness against any external
+ground-truth CNV dataset; for that you would want matched WGS or
+orthogonal CNV callers (copykat, numbat, inferCNA), and different
+assay types (10x UMI vs smart-seq2) would require their own
+validation. The `scripts/phase2_benchmark/` harness is a py-vs-R
+wallclock measurement + regression suite, **not** a real-world
+validation benchmark — cell-type annotations from 3CA upstream are
+used as-is on both sides, so any imperfection in those labels is
+shared by py and R and cannot be used to adjudicate correctness.
 
 Full crosswalk in [NAMESPACE_PARITY.md](NAMESPACE_PARITY.md).
 

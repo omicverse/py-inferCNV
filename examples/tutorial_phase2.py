@@ -126,7 +126,9 @@ print("annotation counts:\n", adata.obs["annotation"].value_counts())
 #
 # `pyinfercnv.InferCNVConfig` pins equivalents for all four. `cutoff=1` is
 # the smart-seq2 value from the R wiki — switch to `0.1` for 10x Genomics
-# data (see the 3CA benchmark under `scripts/phase2_benchmark/`).
+# data. `scripts/phase2_benchmark/` is a py-vs-R wallclock +
+# regression-detection harness (NOT a real-world validation benchmark —
+# see its `__init__.py` for scope).
 
 # %%
 REFERENCE_CATS = ["Microglia/Macrophage", "Oligodendrocytes (non-malignant)"]
@@ -270,12 +272,13 @@ plt.show()
 # | step 17 HMM i3 Jaccard | **0.976** | 0.90 | ~0.95 |
 # | step 17 HMM i6 Jaccard | **0.968** | 0.90 | ~0.95 |
 #
-# These numbers are strictly for the oligodendroglioma smart-seq2 fixture. The
-# 3CA UMI benchmark (17 patients, `scripts/phase2_benchmark/`) is a
-# separate cross-cohort measurement. Run
-# `scripts/phase2_benchmark/run_all.py` + `aggregate.py` to regenerate.
-# On 10x UMI data, remember to pass `cutoff=0.1` (not 1.0) — that is the
-# only data-type-dependent parameter change.
+# These numbers are strictly for R infercnv's own built-in smart-seq2
+# oligodendroglioma fixture, where both pipelines are known-good.
+# pyinfercnv is an accelerated Python re-implementation of R infercnv —
+# correctness is measured against R's fixture, not against external CNV
+# ground truth. On 10x UMI data remember to pass `cutoff=0.1` (not 1.0);
+# that is the only data-type-dependent parameter change documented by
+# the R wiki.
 
 # %% [markdown]
 # ## 8. `result.cnv_regions` — BED-like region calls
@@ -298,9 +301,12 @@ else:
 #   to regenerate the R reference outputs on the same fixture.
 # * **Phase 3 (denoise + BayesNet)** — not covered here. Set `denoise=True`
 #   and `BayesMaxPNormal > 0` once the Python side lands this stage.
-# * **3CA cross-cohort benchmark** — `scripts/phase2_benchmark/` iterates
-#   pycopykat's 17-patient manifest. Outputs land under
-#   `benchmarks/phase2/` and feed the README "Cross-cohort parity" table.
+# * **py-vs-R wallclock + regression harness** —
+#   `scripts/phase2_benchmark/` times R infercnv vs pyinfercnv on a set
+#   of pycopykat-sliced patients for speedup measurement and
+#   release-to-release regression detection. It is **not** a
+#   correctness benchmark — see the module docstring and the README
+#   "Parity status" scope note.
 # * **Bug reports / parity regressions** — before filing, please include
 #   the `result.profile` dict and the version strings from
 #   `Rscript -e 'packageVersion("infercnv")'` and

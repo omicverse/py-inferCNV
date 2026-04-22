@@ -30,11 +30,18 @@
 - **Phase 2 — Phase 1 filter-population fix**: pipeline now filters genes
   on all cells (not ref cells only), closing the Phase 1 upstream-alignment
   gap that was suppressing tier-4 parity (commit `90eabe1`).
-- **Phase 2 — 17-patient 3CA cross-cohort benchmark harness**:
-  `scripts/phase2_benchmark/` iterates the pycopykat 17-patient manifest
-  (Gao2021_Breast, Kim2020_Lung, Lee2020_Colorectal, Obradovic2021_Kidney,
-  Qian2020_Ovarian), runs R infercnv + pyinfercnv side-by-side, aggregates
-  Jaccard / ARI / wallclock into `benchmarks/phase2/phase2_py_vs_r_summary.csv`.
+- **Phase 2 — py-vs-R wallclock + regression-detection harness**:
+  `scripts/phase2_benchmark/` drives R infercnv + pyinfercnv side-by-side
+  across the pycopykat-sliced patient corpus (Gao2021_Breast,
+  Kim2020_Lung, Lee2020_Colorectal, Obradovic2021_Kidney,
+  Qian2020_Ovarian), aggregating Jaccard / ARI / wallclock into a CSV.
+  **This is not a real-world validation benchmark** — the 3CA cell-type
+  annotations consumed by both pipelines as `ref_group_names` are upstream
+  automated labels, not expert-curated ground truth, and consistency
+  between py and R does not imply correctness against external CNV truth.
+  The harness is useful for (a) per-patient wallclock speedup evidence
+  (early observations: 25–192× for 0.5–1.4 kilocell inputs) and (b)
+  detecting algorithmic drift between py and R across future releases.
 - **Tutorial — `examples/tutorial_phase2.py`** + `examples/r_driver_phase2.R`:
   percent-format source + R reference driver for the oligodendroglioma
   fixture. Rebuild via `uv run python examples/_build_notebooks.py`.
@@ -47,12 +54,21 @@
 - **kernel-isolated parity**: 0.9999 on R-aligned input to
   `pyinfercnv.kernels.hmm_viterbi_numba` (bit-exact-class; not a
   cross-pipeline claim).
-- **3CA 10x UMI cross-cohort** (pending benchmark aggregate): use
-  `cutoff=0.1` (wiki-canonical for 10x data, vs 1.0 for smart-seq2).
-  Known R upstream issue: `infercnv::run(HMM_type="i6", ...)` crashes in
-  hspike `rowMeans` on some 3CA fixtures (independent of pyinfercnv);
-  i3 runs successfully and py-vs-R parity is evaluated on i3 only for
-  those patients.
+- **10x UMI data**: use `cutoff=0.1` (R wiki-canonical for 10x, vs
+  1.0 for smart-seq2). Early py-vs-R **consistency** measurements
+  (first 3 patients of the regression-detection harness) show
+  variable agreement: Gao2021_Breast/DCIS1 i3 Jaccard 0.887 / i6
+  Jaccard 0.690; TNBC1 i3 0.907 / i6 0.421; TNBC3 i3 0.937 (i6 R-side
+  hspike `rowMeans` crash). The divergence is almost certainly
+  algorithmic — codex diagnostic review attributes it to
+  `RANN::nn2` (R KD-tree) vs `sklearn.NearestNeighbors(algorithm="brute")`
+  tie-breaking on kilocell tumor KNN graphs, which cascades into
+  different Leiden partitions on the tumor side while reference-group
+  partitions match exactly (ARI 1.000 on both patients). This is
+  **consistency, not correctness** — neither py nor R has been
+  validated against external ground truth on this data; the oligo
+  smart-seq2 fixture above is the only correctness-validated parity
+  surface.
 
 ### Compatibility
 - Breaking — `pyinfercnv.preprocess.filter_low_expression_genes` removed
