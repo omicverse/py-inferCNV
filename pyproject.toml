@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyinfercnv"
-version = "0.1.0.dev0"
+version = "0.2.0.dev0"
 description = "A pure-Python re-implementation of inferCNV (Broad Institute) — single-cell CNV inference from scRNA-seq, AnnData-native, R-parity-audited."
 readme = "README.md"
 license = "BSD-3-Clause"
