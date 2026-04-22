@@ -13,3 +13,7 @@ tests/r_out/
 benchmarks/**/py_out/
 examples/*.executed.ipynb.bak
 /tmp_*
+
+# Raw codex session dumps — archive relevant ones as docs/superpowers/reviews/*.raw.md
+# with a banner; keep stray .log files local-only to avoid leaking injection payloads.
+*.log
