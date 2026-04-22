@@ -5,7 +5,7 @@ from pyinfercnv.config import InferCNVConfig
 from pyinfercnv.pipeline import infercnv
 from pyinfercnv.result import InferCNVResult
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0.dev1"
 
 __all__ = [
     "InferCNVConfig",

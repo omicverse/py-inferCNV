@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0.dev1 (unreleased)
+
+### Performance
+- **Leiden edge dedupe vectorized** (G3 codex Q3). Replaced
+  `a.tolist()`/`b.tolist()`/`set(zip(...))` edge-set construction in
+  `pyinfercnv.subcluster.leiden.leiden_subcluster` with an int64-packed
+  `np.unique` pass. For 2000-cell / k_nn=20 graphs this drops the
+  edge-build step from a Python-object hotspot to a pure-NumPy C-level
+  sort; no behavioural change (same edge set, same Leiden partition;
+  all 9 `tests/unit/test_subcluster_leiden.py` pass unchanged).
+
 ## 0.2.0.dev0 (unreleased)
 
 ### Added

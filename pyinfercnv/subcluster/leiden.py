@@ -146,16 +146,22 @@ def leiden_subcluster(
     # R `graph_from_adjacency_matrix(mode="undirected")` -> `mode="max"`:
     # undirected edge (i, j), i != j, exists iff j is in KNN(i) or i is in
     # KNN(j). See module docstring. We sort each pair (min, max) and dedupe
-    # via a set; self-loops (i == j) are dropped.
+    # via np.unique on an int64 key; no per-edge Python objects are
+    # materialised until the final igraph constructor call (G3 codex Q3).
     row_idx = np.repeat(np.arange(n_cells, dtype=np.int64), k_nn)   # (n_cells * k_nn,)
     col_idx = idx.reshape(-1).astype(np.int64)
     non_self = row_idx != col_idx
     a = np.where(row_idx < col_idx, row_idx, col_idx)[non_self]
     b = np.where(row_idx < col_idx, col_idx, row_idx)[non_self]
-    edge_tuples = set(zip(a.tolist(), b.tolist(), strict=True))
+    # Pack (a, b) into a single int64 and dedupe via sorted unique.
+    # a < b < n_cells < 2**31 guarantees no collision in 63-bit key.
+    edge_keys = np.unique(a * n_cells + b)
+    edges_arr = np.empty((edge_keys.size, 2), dtype=np.int64)
+    edges_arr[:, 0] = edge_keys // n_cells
+    edges_arr[:, 1] = edge_keys % n_cells
 
     # ---- 3. Build igraph graph and run cluster_leiden CPM ----
-    g = ig.Graph(n=n_cells, edges=list(edge_tuples), directed=False)
+    g = ig.Graph(n=n_cells, edges=edges_arr.tolist(), directed=False)
 
     # community_leiden wraps the same C core as R's cluster_leiden.
     # n_iterations=-1 runs until convergence (R default).
