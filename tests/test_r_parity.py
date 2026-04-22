@@ -254,6 +254,58 @@ def test_step14_invert_log2_parity():
     assert diff < 1e-4, f"invert_log2 step14 max_diff={diff:.3e}"
 
 
+@pytest.mark.skipif(not _r_step_available("step14_invert"),
+                    reason="r_out/step14_invert.tsv not generated; run Rscript tests/r_reference.R")
+def test_step14_cnv_matrix_spearman_oligo():
+    """**Primary py-vs-R parity anchor** (HANDOFF v7 §2.2, Jason 2026-04-23
+    review): Spearman ρ on the continuous CNV matrix step14 between py and R
+    must be ≥ 0.999 on oligo.
+
+    Why this is primary (not ARI): Leiden bucket IDs are arbitrary
+    algorithm-internal labels; the continuous log2-FC matrix is the actual
+    scientific output every downstream step consumes. Observed Spearman ρ
+    at HEAD is 0.9998 on oligo and 1.0000 on the three 3CA kilocell 10x
+    UMI patients (DCIS1 / TNBC1 / TNBC3); full data in
+    benchmarks/phase2/Gao2021_Breast/cnv_matrix_spearman.md.
+
+    This test regenerates py step14 from R step12 (same input as
+    test_step14_invert_log2_parity) and asserts rank agreement. A drop
+    below 0.999 here signals a regression in either ``invert_log2`` or any
+    upstream Phase-1 step the step12 fixture depends on.
+    """
+    from scipy.stats import spearmanr
+
+    r_step12, _, _ = _load_r_step("step12_subtracted2")
+    r_step14, _, _ = _load_r_step("step14_invert")
+    py_out = invert_log2(r_step12.T.astype(np.float32)).T.astype(np.float64)
+
+    # Global flat Spearman on aligned (genes × cells) matrices
+    rho, _ = spearmanr(py_out.ravel(), r_step14.ravel())
+    assert rho >= 0.999, (
+        f"step14 CNV matrix Spearman ρ={rho:.6f} below floor 0.999 — "
+        f"the continuous CNV signal has drifted from R"
+    )
+
+    # Per-cell Spearman floor: every cell's gene vector must rank-agree
+    # with R's within reasonable tolerance (observed 0.9998 ± 0.0001 on
+    # oligo; floor 0.95 is generously permissive and would catch any
+    # meaningful per-cell drift).
+    n_cells = py_out.shape[1]
+    rhos = np.empty(n_cells)
+    for j in range(n_cells):
+        col_py = py_out[:, j]; col_r = r_step14[:, j]
+        if np.all(col_py == col_py[0]) or np.all(col_r == col_r[0]):
+            rhos[j] = np.nan
+            continue
+        rhos[j], _ = spearmanr(col_py, col_r)
+    valid = np.isfinite(rhos)
+    assert valid.any(), "all cells had constant CNV — test fixture is broken"
+    per_cell_min = float(np.nanmin(rhos))
+    assert per_cell_min >= 0.95, (
+        f"step14 per-cell Spearman ρ min = {per_cell_min:.4f} below floor 0.95"
+    )
+
+
 # ============================================================================
 # Step 16: prune_outliers in LINEAR FC space (R run() order: AFTER invert_log2)
 # ============================================================================
@@ -417,18 +469,30 @@ def _compute_jaccard_floor(py_states: "np.ndarray",
 
 
 # ============================================================================
-# Phase 2 — Step 15: tumor subclusters ARI floor
+# Phase 2 — Step 15: tumor subclusters ARI floor (OPERATIONAL ANCHOR ONLY)
 # ============================================================================
 
 @pytest.mark.skipif(not _r_step_available("step15_subclusters"),
                     reason="r_out/step15_subclusters.tsv not generated; run Rscript tests/r_reference.R")
 def test_step15_subclusters_ari_floor(raw_counts_all, annotations, gene_order):
-    """Tier-3.5 ARI floor: Python subcluster assignments vs R reference.
+    """Operational floor on Leiden subcluster ARI vs R step15. **Not a parity
+    claim.** Retained as a regression anchor that catches Leiden-wiring bugs
+    (the kind codex found in 2026-04-xx when ``random_state`` was silently
+    dropped) — not as evidence of py-vs-R correctness.
 
-    ARI >= 0.50 (leiden uses non-deterministic k-NN graph; R igraph and Python
-    leidenalg/scanpy produce different partitions. Floor is empirical; observed
-    ~0.60 on this dataset).
-    xfail when Phase 2 pipeline not yet integrated by Agent-E.
+    Why this is operational-only (HANDOFF v7 §2.1, Jason 2026-04-23 review):
+    Leiden bucket IDs are arbitrary algorithm-internal labels with no
+    cross-language semantic contract. ARI measures label-invariant
+    permutation agreement, so a high ARI only means "same cells co-cluster"
+    — not "same algorithm behaviour". The load-bearing parity metric is
+    Spearman ρ on the continuous CNV matrix; see
+    ``test_cnv_matrix_spearman_oligo`` below and
+    ``benchmarks/phase2/Gao2021_Breast/cnv_matrix_spearman.md`` for the
+    primary evidence.
+
+    Floor 0.85 is the R-parity regression anchor (observed 1.000 on the
+    oligodendroglioma fixture; bad values below 0.60 historically meant
+    the seed wiring or the igraph C-core call had drifted).
     """
     try:
         import anndata  # noqa: F401

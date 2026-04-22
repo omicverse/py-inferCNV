@@ -2,7 +2,7 @@
 
 Pure-Python re-implementation of [inferCNV](https://github.com/broadinstitute/inferCNV) (Broad Institute) — single-cell CNV inference from scRNA-seq, AnnData-native, R-parity-audited.
 
-**Status:** v0.2.0.dev2 — **Phase 2** (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions) complete and R-parity-validated on the smart-seq2 oligodendroglioma fixture (ARI 1.000, Jaccard 0.976/0.968 vs R infercnv). **pyinfercnv is a Python-accelerated re-implementation of R infercnv**; parity numbers come from the R package's own bundled test fixture. Early wallclock evidence on 1–1.4 kilocell 10x UMI inputs: **25–192× py-vs-R speedup** (see `scripts/phase2_benchmark/` — a py-vs-R wallclock + regression-detection suite, not a real-world correctness benchmark). Phase 3 (BayesNet MCMC + denoise) is not yet implemented.
+**Status:** v0.2.0.dev2 — **Phase 2** (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions) complete and R-parity-validated. The primary parity metric is **Spearman ρ on the continuous post-Phase-1 CNV matrix** (the quantity every downstream step consumes): **ρ = 1.0000 on three 10x UMI patients (DCIS1/TNBC1/TNBC3, n=520-1399 cells) and 0.9998 on the smart-seq2 oligodendroglioma fixture**; Pearson 0.993-0.999. HMM state rank-correlation (i3 ordinal 0-2) is 0.92-0.96 across the three 3CA patients. **pyinfercnv is a Python-accelerated re-implementation of R infercnv**; parity numbers come from the R package's own bundled test fixture plus three 3CA kilocell 10x UMI patients. Early wallclock evidence: **25–192× py-vs-R speedup** (see `scripts/phase2_benchmark/` — a py-vs-R wallclock + regression-detection suite, not a real-world correctness benchmark). Phase 3 (BayesNet MCMC + denoise) is not yet implemented.
 
 ## Installation
 
@@ -83,23 +83,67 @@ relaxed threshold is the empirical floor.
 ## Parity status (Phase 2)
 
 Phase 2 adds tumor subclustering (leiden), HMM state calls (i3 / i6), and
-hspike calibration. Measurements on the same oligodendroglioma fixture:
+hspike calibration.
 
-| R step | Python module | Tier | Measurement |
+### Primary metric — Spearman ρ on the continuous CNV matrix
+
+The step-14 post-Phase-1 `cnv_matrix` is the continuous log2-FC signal that
+every downstream step (HMM, region calls, heatmap) consumes. Its rank
+correlation between py and R is the most load-bearing parity claim we make.
+
+| Fixture | cells | genes | per-cell ρ mean±std | global flat ρ | Pearson |
+|---|---|---|---|---|---|
+| oligodendroglioma (smart-seq2, R's own fixture) | 184 | 8508 | **0.9998 ± 0.0001** | **0.9998** | 0.9928 |
+| Gao2021_Breast/DCIS1 (10x UMI, 3CA) | 1399 | 9237 | **1.0000 ± 0.0000** | **1.0000** | 0.9980 |
+| Gao2021_Breast/TNBC1 (10x UMI, 3CA) | 1022 | 9654 | **1.0000 ± 0.0000** | **1.0000** | 0.9964 |
+| Gao2021_Breast/TNBC3 (10x UMI, 3CA) | 520  | 10835 | **1.0000 ± 0.0000** | **1.0000** | 0.9987 |
+
+Raw data + methodology: `benchmarks/phase2/Gao2021_Breast/cnv_matrix_spearman.{json,md}`.
+Reproducer: `uv run python scripts/track_a1/cnv_matrix_spearman.py`.
+
+### Secondary metric — HMM state Spearman ρ (post-discretization)
+
+HMM state is a bucketed view of the continuous CNV matrix (i3: 0/1/2 for
+deletion/neutral/amplification; i6: 0-5 for finer gradations). Rank
+correlation on state sequences tells you whether py and R put the same
+bins into the same magnitude bucket.
+
+| Patient | HMM | per-cell ρ mean±std | global flat ρ |
 |---|---|---|---|
-| `define_signif_tumor_subclusters` (leiden path) | `subcluster.leiden.leiden_subcluster` | 3.5 empirical | ARI `1.000` vs R step15, exceeds spec §5.2 target `0.85` |
-| `predict_CNV_via_HMM_wrapper` (i3, deterministic) | `hmm.predict_i3` + `pipeline_phase2.run_phase2` | 3.5 empirical | Jaccard `0.976` vs R step17, exceeds spec §5.2 target `0.95` |
-| `predict_CNV_via_HMM_wrapper` (i6 + hspike) | `hmm.predict_i6` + `hmm.hspike.calibrate_i6_emission` | 3.5 empirical | Jaccard `0.968` vs R step17, exceeds spec §5.2 target `0.95` |
-| Viterbi.dthmm.adj kernel (diagnostic, R-aligned input) | `kernels.hmm_viterbi_numba` | kernel-isolated parity | Jaccard `0.9999` with R's own step15+step16 feeding the py kernel |
+| DCIS1 | i3 | 0.9202±0.056 | 0.9208 |
+| DCIS1 | i6 | 0.8273±0.052 | 0.8178 |
+| TNBC1 | i3 | 0.9610±0.023 | 0.9615 |
+| TNBC1 | i6 | 0.7524±0.047 | 0.7415 |
+| TNBC3 | i3 | 0.9323±0.145 | 0.9578 |
+| TNBC3 | i6 | — (R hspike crashed on this fixture, not comparable) | — |
 
-"3.5 empirical" means a floor-based assertion on categorical state agreement
-(ARI / per-cell Jaccard), not a continuous `max_diff < 1e-6` claim. CI floors
-are `0.85 / 0.90 / 0.90` respectively — deliberately below the spec targets
-so that a true regression below the observed numbers can be distinguished
-from stochastic drift at spec boundaries. See `tests/test_r_parity.py` for
-the per-assert rationale comments, and
-`docs/superpowers/findings/2026-04-21-i3-triage-findings.md` §(2) for the
-kernel-isolation diagnostic derivation.
+The drop from ρ≈1.0 on the continuous matrix to ρ 0.75-0.96 on HMM states
+is **discretization amplification**: when the continuous log2-FC value is
+near a state boundary, small floating-point differences between py and R
+can flip the assigned bucket for a few bins per cell. The underlying
+signal agreement is unchanged.
+
+### Operational metric — oligodendroglioma kernel parity (anchor, not a headline)
+
+| R step | Python module | Measurement |
+|---|---|---|
+| `predict_CNV_via_HMM_wrapper` (i3) | `hmm.predict_i3` + `pipeline_phase2.run_phase2` | Jaccard 0.976 vs R step17 on oligo |
+| `predict_CNV_via_HMM_wrapper` (i6 + hspike) | `hmm.predict_i6` + `hmm.hspike.calibrate_i6_emission` | Jaccard 0.968 vs R step17 on oligo |
+| Viterbi.dthmm.adj kernel (R-aligned input) | `kernels.hmm_viterbi_numba` | Jaccard 0.9999 with R's own step15+step16 feeding py kernel |
+
+CI floors are `0.90 / 0.90` on Jaccard — deliberately below observed
+values so real regressions can be distinguished from stochastic drift.
+
+### Metrics deliberately dropped
+
+- **Subcluster ARI** is not a parity metric. `subcluster_s1` in py and R
+  are **arbitrary algorithm-internal bucket labels** with no cross-language
+  semantic mapping; a high ARI only means "same cells land in buckets that
+  happened to line up" and a low ARI can mean either real divergence or
+  just RNG-driven permutation. The test at
+  `tests/test_r_parity.py::test_step15_subclusters_ari_floor` is retained
+  as an internal-consistency regression anchor (floor 0.85), not a parity
+  claim. The load-bearing py-vs-R claim is the Spearman ρ table above.
 
 **Scope of the Phase 2 numbers above.** The fixture is smart-seq2
 (oligodendroglioma downsampled, 184 cells) — R infercnv's own built-in
@@ -123,28 +167,41 @@ validation benchmark — cell-type annotations from 3CA upstream are
 used as-is on both sides, so any imperfection in those labels is
 shared by py and R and cannot be used to adjudicate correctness.
 
-**Track A closeout — Leiden parity-in-distribution.** Phase 2 Leiden
-on kilocell 10x UMI inputs produced single-draw ARIs in the 0.4–0.8
-range (DCIS1 0.447, TNBC1 0.592, TNBC3 0.840). A diagnostic sweep
-(10 seeds × 2 patients × graph variants; see
-`benchmarks/phase2/Gao2021_Breast/track_a_summary.md`) showed:
+**Track A closeout — the DCIS1 "divergence" was a label-arbitrariness
+artifact.** HANDOFF v5/v6 flagged DCIS1 as having Leiden subcluster
+ARI = 0.447, which looked like a systematic py-vs-R gap. Track A
+showed two separate things:
 
+1. **The subcluster ID is not a scientific quantity.** Leiden outputs
+   arbitrary integer bucket labels (`cluster_0`, `cluster_1`, …); py
+   and R have no cross-language contract on which cells get which
+   label. ARI measures label-invariant permutation agreement, but
+   when Leiden is RNG-dominated (as it is at the low resolution
+   infercnv uses on kilocell 10x UMI graphs) both sides' partitions
+   legitimately bounce between near-equal CPM optima with different
+   labellings. R's own `cluster_leiden` across 10 seeds has ARI
+   0.47±0.12 (DCIS1), 0.67±0.10 (TNBC1), 0.77±0.29 (TNBC3) vs its
+   own step15 baseline — py is within that self-noise floor in every
+   case. ARI is therefore retired as a headline parity metric.
+2. **The underlying signal is near-identical.** Spearman ρ on the
+   continuous post-Phase-1 CNV matrix is **1.0000 on all three 3CA
+   patients and 0.9998 on oligo** (table above). The HMM state
+   Spearman on i3 is 0.92-0.96. The Leiden subcluster boundary
+   happens to fall inside the RNG-sensitive region of this graph, so
+   the categorical subcluster ID fluctuates — but that fluctuation
+   is downstream of a nearly bit-exact continuous CNV signal.
+
+Diagnostic sweep details (all under
+`benchmarks/phase2/Gao2021_Breast/`):
 - **KNN edge-set parity**: py `sklearn.NearestNeighbors(brute)` vs R
   `RANN::nn2` yielded Jaccard 1.0000 on all three 3CA patients; scipy
-  `cKDTree` and sklearn `kd_tree` also Jaccard 1.0000. KNN is not a
-  source of divergence.
-- **Leiden self-noise**: R's own `cluster_leiden` across 10 seeds on
-  the same graph has ARI 0.47±0.12 (DCIS1), 0.67±0.10 (TNBC1),
-  0.77±0.29 (TNBC3) vs its step15 baseline. The DCIS1 0.447 that
-  looked like a divergence is a single-draw observation inside R's
-  own 1-σ noise floor.
-- **py's Leiden in distribution**: ARI 0.47±0.14 (DCIS1, Δ=-0.007),
-  0.73±0.09 (TNBC1, Δ=+0.064), 0.92±0.04 (TNBC3, Δ=+0.149) vs same
-  baseline. No observed systematic gap.
-- **CPM objective**: manual `Q = Σ_c [e_c − γ n_c(n_c−1)/2]`
-  computed on R's graph for a DCIS1 seed-0 pair gave py 10744 vs R
-  10724. Py finds equal-or-higher Leiden local optima on the same
-  graph.
+  `cKDTree` and sklearn `kd_tree` also Jaccard 1.0000. KNN itself is
+  deterministic on both sides.
+- **CPM objective on same graph**: manual `Q = Σ_c [e_c − γ n_c(n_c−1)/2]`
+  computed on R's graph for a DCIS1 seed-0 pair gives py **10744**
+  vs R **10724**. Py finds equal-or-higher Leiden local optima.
+- See `track_a_summary.md` and `cnv_matrix_spearman.md` for the full
+  per-patient tables; diagnostic scripts live under `scripts/track_a1/`.
 
 Per-seed identity across R and Python RNGs is not a contract —
 R-igraph seeds through R's Mersenne-Twister + C PCG32, python-igraph
@@ -187,7 +244,7 @@ uv run pytest tests/test_wheel.py -v
   - `center/` — per-cell median
   - `cna/` — outlier prune
   - `kernels/` — numba hot kernels (tail smoothing)
-  - `validation/` — r-parity metrics (max_diff, ARI, Jaccard)
+  - `validation/` — r-parity metrics (max_diff, Spearman ρ, Jaccard; ARI retained as operational helper only)
   - `viz/` — matplotlib heatmap (no omicverse; ov-aligned palette hardcoded)
   - `pipeline.py` — end-to-end orchestration with psutil profile hooks
   - `cli.py` — typer app (`run-h5ad`, `version`)

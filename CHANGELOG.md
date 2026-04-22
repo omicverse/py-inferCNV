@@ -2,15 +2,45 @@
 
 ## Unreleased (post-v0.2.0.dev1)
 
+### Primary parity metric shift: Spearman ρ on CNV matrix
+
+Subcluster ARI on Leiden output is retired as a parity metric (Jason
+v7 review 2026-04-23: "ARI 是彻底不要的，因为这个只是一个算法标签").
+Cluster IDs are arbitrary algorithm-internal labels with no
+cross-language semantic contract; ARI measures label-invariant
+permutation agreement but does not reflect whether py and R produce
+the same scientific signal. The primary metric going forward is
+**Spearman ρ on the continuous post-Phase-1 CNV matrix** (step 14 —
+the log2-FC signal every downstream step consumes):
+
+| Fixture | cells × genes | per-cell ρ | global flat ρ | Pearson |
+|---|---|---|---|---|
+| oligodendroglioma (smart-seq2) | 184 × 8508 | 0.9998±0.0001 | 0.9998 | 0.9928 |
+| Gao2021_Breast/DCIS1 (10x UMI) | 1399 × 9237 | 1.0000±0.0000 | 1.0000 | 0.9980 |
+| Gao2021_Breast/TNBC1 (10x UMI) | 1022 × 9654 | 1.0000±0.0000 | 1.0000 | 0.9964 |
+| Gao2021_Breast/TNBC3 (10x UMI) | 520 × 10835  | 1.0000±0.0000 | 1.0000 | 0.9987 |
+
+Secondary metric — HMM state Spearman ρ (i3 ordinal, post-discretization):
+DCIS1 0.921, TNBC1 0.962, TNBC3 0.958 (global flat). i6 state Spearman
+is lower (0.74-0.82) because finer discretization amplifies boundary
+drift; i6 on TNBC3 is not comparable because R's hspike crashed on
+that fixture.
+
+Raw data: `benchmarks/phase2/Gao2021_Breast/{spearman_benchmark,cnv_matrix_spearman}.md`.
+Reproducer: `scripts/track_a1/cnv_matrix_spearman.py` + `scripts/track_a1/spearman_benchmark.py`.
+
+Operational ARI retained at `tests/test_r_parity.py::test_step15_subclusters_ari_floor`
+(floor 0.85) as a Leiden-wiring regression anchor. Not a parity claim.
+
 ### Track A — py = R Leiden fidelity closeout
 
-Three-patient diagnostic (DCIS1/TNBC1/TNBC3) establishes that py and
-R Leiden are statistically equivalent in distribution and that py
-finds equal-or-higher CPM objective on the same graph. The HANDOFF
-v5/v6 "DCIS1 ARI 0.447 divergence" was a single-draw observation
-inside R's own 0.10-0.29 self-noise floor. Full data + methodology
-under `benchmarks/phase2/Gao2021_Breast/track_a_summary.md` and
-`docs/superpowers/reviews/track-a-closeout-codex.md`.
+Three-patient diagnostic (DCIS1/TNBC1/TNBC3) plus oligo established
+that the underlying CNV matrix is near-identical between py and R
+(ρ ≥ 0.9998). The HANDOFF v5/v6 "DCIS1 ARI 0.447 divergence" was a
+label-arbitrariness + Leiden-RNG artifact at the categorical
+subcluster level, not a signal-level disagreement. Full data +
+methodology under `benchmarks/phase2/Gao2021_Breast/track_a_summary.md`
+and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 
 ### Added
 

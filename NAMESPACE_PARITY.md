@@ -6,8 +6,15 @@ Tier meanings (spec §5.1):
 - **4 bit-exact**   `max_diff < 1e-10`
 - **4 approximate** `max_diff < 1e-6`
 - **4 (relaxed)**   `max_diff < 1e-3` (float32 cumulative)
-- **3.5 empirical** stochastic — ARI / Jaccard floor
+- **3.5 empirical** stochastic — Spearman ρ / Jaccard floor
 - **3** identity    same ID set / labels
+
+**Primary parity metric (Phase 2 and on): Spearman ρ on the continuous
+post-Phase-1 CNV matrix (step 14).** Measurements (cnv_matrix_spearman.md):
+oligo 0.9998; DCIS1 / TNBC1 / TNBC3 all 1.0000. Subcluster ARI on Leiden
+output is **operational only**, not a parity claim — bucket IDs are
+arbitrary algorithm-internal labels with no py-vs-R semantic contract
+(Jason's v7 review; see HANDOFF.md §2.1).
 
 ## Phase 1 (R steps 1–14 + 16)
 
@@ -29,7 +36,7 @@ Tier meanings (spec §5.1):
 
 | R source / function | Python submodule | Phase | Tier | Status | R-parity metric |
 |---|---|---|---|---|---|
-| `define_signif_tumor_subclusters_via_leiden` | `subcluster.leiden.leiden_subcluster` | 2 | 3.5 empirical | ✓ | ARI 1.000 vs R step15 (floor 0.85; python-igraph C-core + seeded RNG) |
+| `define_signif_tumor_subclusters_via_leiden` | `subcluster.leiden.leiden_subcluster` | 2 | 3.5 empirical | ✓ | **Primary**: CNV-matrix Spearman ρ = 1.0000 on DCIS1/TNBC1/TNBC3, 0.9998 on oligo (upstream step14 is what this subcluster consumes). Subcluster ARI kept as operational floor 0.85 (`tests/test_r_parity.py::test_step15_subclusters_ari_floor`) — not a parity claim; see HANDOFF.md §2.1 |
 | `define_signif_tumor_subclusters_via_random_smooothed_trees` | `subcluster.random_trees` | 2 | 3.5 empirical | ✓ | implemented; selected via `tumor_subcluster_partition_method="random_trees"` |
 | `.qnorm` (quantile normalisation helper) | `subcluster.qnorm` | 2 | 4 approximate | ✓ | per-column rank-based; exercised as part of random_trees |
 | `inferCNV_i3HMM` (`predict_i3`) | `hmm.predict_i3` | 2 | 3.5 empirical | ✓ | Jaccard 0.976 vs R step17_hmm_i3 (floor 0.90, spec §5.2 target 0.95) |
