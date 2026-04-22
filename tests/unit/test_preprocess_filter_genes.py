@@ -19,15 +19,6 @@ def test_requires_min_cells():
     assert mask.tolist() == [False, False, True]
 
 
-def test_reference_only_filter_respects_ref_indices():
-    X = sp.csr_matrix(np.array([[10, 0], [10, 0], [0, 5], [0, 5]], dtype=np.float32))
-    ref_idx = [0, 1]
-    mask = filter_low_expression_genes(
-        X, cutoff=1.0, min_cells_per_gene=1, reference_cell_idx=ref_idx
-    )
-    assert mask.tolist() == [True, False]
-
-
 def test_dense_and_sparse_equivalence():
     rng = np.random.default_rng(0)
     dense = rng.poisson(0.5, size=(10, 20)).astype(np.float32)

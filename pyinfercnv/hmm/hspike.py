@@ -892,15 +892,24 @@ def _run_phase1_replay_on_hspike(
 
     X = np.asarray(hspike_counts, dtype=np.float32)
 
-    # --- Step 1: filter low-expression genes ---
+    # --- Step 1: filter low-expression genes.
+    # NOTE: hspike.phase1 uses a *ref-only* filter population (unlike the main
+    # Phase 1 pipeline which uses all cells — see Option 1 fix in commit
+    # 90eabe1). Empirically, switching hspike to all-cells drops i6 Jaccard
+    # 0.968 -> 0.932, so the ref-only path is what matches R's hspike behaviour
+    # on this fixture. The filter function itself is population-agnostic; we
+    # slice X to ref cells before computing the mask, then apply the mask to
+    # the full X. This is behaviourally equivalent to the old
+    # `reference_cell_idx=` kwarg path (removed as a footgun — see
+    # preprocess/filter_genes.py docstring).
     ref_idx_all = np.concatenate([
         np.asarray(v, dtype=np.intp) for v in reference_indices.values()
     ])
+    X_ref = X[ref_idx_all, :]
     keep_mask = filter_low_expression_genes(
-        X,
+        X_ref,
         cutoff=config.cutoff,
         min_cells_per_gene=config.min_cells_per_gene,
-        reference_cell_idx=ref_idx_all,
     )
     # If nothing passes the filter, keep all genes (avoid empty matrix)
     if not keep_mask.any():

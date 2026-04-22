@@ -371,13 +371,11 @@ def _ref_cats_from_adata(adata: "AnnData") -> list[str]:
 def _get_pipeline_gene_names(adata: "AnnData",
                               cutoff: float = 1.0,
                               min_cells_per_gene: int = 3,
-                              chr_exclude: tuple = ("chrX", "chrY", "chrM"),
-                              reference_cell_idx=None) -> list[str]:
+                              chr_exclude: tuple = ("chrX", "chrY", "chrM")) -> list[str]:
     """Reconstruct ordered gene names as the infercnv pipeline sees them.
 
     Mirrors the pipeline's filter_low_expression_genes -> _build_chromosome_layout
-    sequence (including reference-cell-only filtering) so the resulting list
-    aligns column-for-column with result.hmm_states.
+    sequence so the resulting list aligns column-for-column with result.hmm_states.
     """
     import scipy.sparse as _sp
     from pyinfercnv.pipeline import _build_chromosome_layout
@@ -388,7 +386,6 @@ def _get_pipeline_gene_names(adata: "AnnData",
 
     keep = filter_low_expression_genes(
         X, cutoff=cutoff, min_cells_per_gene=min_cells_per_gene,
-        reference_cell_idx=reference_cell_idx,
     )
     var_kept = adata.var.iloc[np.where(keep)[0]].copy()
 
@@ -528,9 +525,6 @@ def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
         pytest.skip("No overlapping cell ids between Python output and R TSV")
 
     # Reconstruct pipeline gene ordering: filter_genes (all cells) -> chr-sorted.
-    # 2026-04-22: pipeline.py no longer passes reference_cell_idx to the
-    # low-expression filter (Option 1 fix for Phase 1 gene-set divergence);
-    # this reconstruction must follow suit, else gene_idx alignment breaks.
     try:
         py_gene_names = _get_pipeline_gene_names(adata)
     except Exception as exc:
@@ -622,9 +616,6 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
         pytest.skip("No overlapping cell ids between Python output and R TSV")
 
     # Reconstruct pipeline gene ordering: filter_genes (all cells) -> chr-sorted.
-    # 2026-04-22: pipeline.py no longer passes reference_cell_idx to the
-    # low-expression filter (Option 1 fix for Phase 1 gene-set divergence);
-    # this reconstruction must follow suit, else gene_idx alignment breaks.
     try:
         py_gene_names = _get_pipeline_gene_names(adata)
     except Exception as exc:

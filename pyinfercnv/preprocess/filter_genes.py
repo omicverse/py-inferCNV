@@ -1,7 +1,13 @@
 """Gene-level filters — R parity with `require_above_min_mean_expr_cutoff`
-and `require_above_min_cells_ref` (`inferCNV_ops.R:2128-2212`).
+(`inferCNV_ops.R:2128-2212`).
 
-Returns a boolean mask of length n_genes (True = keep).
+Returns a boolean mask of length n_genes (True = keep). Both the mean-cutoff
+and the min-cells tests are computed on the *full* cell matrix, mirroring
+R's stage-1 filter. R's stage-2 `require_above_min_cells_ref` (a ref-only
+count test) is not applied under default parameters on the standard
+oligodendroglioma fixture — empirically [A] all-cells keeps 8508 genes
+bit-exact vs R step02, while a two-stage AND keeps only 7904. See
+scripts/triage_phase1/ for the evidence.
 
 G1 patch P5: use `Xc.getnnz(axis=0)` instead of `(Xc > 0).sum(axis=0)` —
 sparse-idiomatic and avoids materializing the boolean comparison.
@@ -17,7 +23,6 @@ def filter_low_expression_genes(
     *,
     cutoff: float = 1.0,
     min_cells_per_gene: int = 3,
-    reference_cell_idx=None,
 ) -> np.ndarray:
     """Boolean mask over genes (cols of X).
 
@@ -26,19 +31,11 @@ def filter_low_expression_genes(
     X
         Counts matrix, cells x genes, CSR float32 or dense.
     cutoff
-        Minimum mean expression across the filter population. Genes with mean
-        < cutoff are dropped.
+        Minimum mean expression across all cells. Genes with mean < cutoff are dropped.
     min_cells_per_gene
         Minimum number of cells with strictly positive expression.
-    reference_cell_idx
-        If given, restrict the mean-cutoff and min-cells population to these rows
-        (mirrors R `require_above_min_cells_ref`).
     """
     Xc = X.tocsr() if sp.issparse(X) else X
-
-    if reference_cell_idx is not None:
-        ref = np.asarray(reference_cell_idx)
-        Xc = Xc[ref, :]
 
     if sp.issparse(Xc):
         gene_sum = np.asarray(Xc.sum(axis=0)).ravel()
