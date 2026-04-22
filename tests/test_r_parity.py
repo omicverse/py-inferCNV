@@ -471,8 +471,11 @@ def test_step15_subclusters_ari_floor(raw_counts_all, annotations, gene_order):
 
     ari = sklearn.metrics.adjusted_rand_score(r_labels, py_labels)
     print(f"  step15 ARI={ari:.3f}")
-    # Floor 0.50: leiden graphs differ between R (igraph) and Python (scanpy/leidenalg).
-    assert ari >= 0.50, f"step15 subclusters ARI={ari:.3f} below floor 0.50"
+    # Floor 0.85 = spec §5.2 subcluster ARI target.
+    # Observed at HEAD: 1.000 (python-igraph C-core + per-group partitioning,
+    # seeded via ig.set_random_number_generator — commits f991ae0, 4b7206d).
+    # Known bad values: 0.603 (pre-igraph-swap, scanpy/leidenalg backend).
+    assert ari >= 0.85, f"step15 subclusters ARI={ari:.3f} below floor 0.85"
 
 
 # ============================================================================
@@ -553,8 +556,17 @@ def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
         neutral_py=2, neutral_r=2,
     )
     print(f"  step17 HMM i6 mean_jaccard={mean_jaccard:.3f}")
-    assert mean_jaccard >= 0.60, (
-        f"step17 hmm_i6 mean_jaccard={mean_jaccard:.3f} below floor 0.60"
+    # Floor 0.90: regression detector, not a spec restatement.
+    # Observed at HEAD: 0.968 (post-Option-1 Phase 1 gene filter fix, commit 90eabe1).
+    # Cross-process variance measured 0 across 5 fresh uv-run invocations on this
+    # fixture with random_state=0 (hspike NB sampling is deterministic under a
+    # seeded RandomState). 0.068 buffer absorbs future fixture changes / numba
+    # fastmath ordering / hspike parameter tweaks without tripping CI.
+    # Known bad values: 0.781 (pre-Option-1, ref-only Phase 1 filter), 0.713 (pre-C5 emission fix).
+    # Spec §5.2 tier-4 target ~0.95 is exceeded; floor deliberately under target
+    # so regression-vs-spec-drift can be distinguished.
+    assert mean_jaccard >= 0.90, (
+        f"step17 hmm_i6 mean_jaccard={mean_jaccard:.3f} below floor 0.90"
     )
 
 
@@ -640,6 +652,13 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
         neutral_py=1, neutral_r=1,
     )
     print(f"  step17 HMM i3 mean_jaccard={mean_jaccard:.3f}")
-    assert mean_jaccard >= 0.70, (
-        f"step17 hmm_i3 mean_jaccard={mean_jaccard:.3f} below floor 0.70"
+    # Floor 0.90: regression detector, not a spec restatement.
+    # Observed at HEAD: 0.976 (post-Option-1 Phase 1 gene filter fix, commit 90eabe1).
+    # i3 is deterministic end-to-end per findings/2026-04-21-i3-triage-findings.md §3.1
+    # (three-seed reproducible at 0.7058345795493797 pre-fix; Option 1 lifts it to 0.976).
+    # 0.076 buffer absorbs future igraph C PRNG stream shifts across platforms.
+    # Known bad values: 0.750 (pre-Option-1), 0.706 (pre-C5/C6 fixes).
+    # Spec §5.2 tier-4 target ~0.95 is exceeded; floor deliberately under target.
+    assert mean_jaccard >= 0.90, (
+        f"step17 hmm_i3 mean_jaccard={mean_jaccard:.3f} below floor 0.90"
     )
