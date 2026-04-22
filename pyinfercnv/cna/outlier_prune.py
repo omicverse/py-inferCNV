@@ -42,10 +42,10 @@ def prune_outliers(
     if lower_bound is not None or upper_bound is not None:
         lo = -np.inf if lower_bound is None else float(lower_bound)
         hi = np.inf if upper_bound is None else float(upper_bound)
-        return np.clip(X, lo, hi).astype(np.float32)
+        return np.clip(X, lo, hi).astype(np.float64)
     if method == "average_bound":
         lo, hi = _average_bounds(X)
-        return np.clip(X, lo, hi).astype(np.float32)
+        return np.clip(X, lo, hi).astype(np.float64)
     if method is None:
         return np.asarray(X, dtype=np.float32).copy()
     raise ValueError(f"unknown outlier method {method!r}")

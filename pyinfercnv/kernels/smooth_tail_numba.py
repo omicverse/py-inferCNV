@@ -81,8 +81,11 @@ def smooth_tail_overwrite(out: np.ndarray, obs: np.ndarray, window_length: int) 
             for k in range(chunk_len):
                 s_right += float(obs[r, right_start + k]) * numer[numer_start + (chunk_len - 1 - k)]
 
-            out[r, t] = np.float32(s_left / denom)
-            out[r, end_idx] = np.float32(s_right / denom)
+            # Assign in the dtype of `out` (float64 on bit-exact path,
+            # float32 if caller downcasts before calling). Numba
+            # performs the conversion on assignment.
+            out[r, t] = s_left / denom
+            out[r, end_idx] = s_right / denom
 
 
 @njit(cache=True, parallel=True, fastmath=False)

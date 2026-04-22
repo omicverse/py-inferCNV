@@ -2,6 +2,40 @@
 
 ## Unreleased (post-v0.2.0.dev1)
 
+### Phase 1 bit-exact — all intermediates float64
+
+All Phase 1 preprocess modules (normalize, subtract_ref, log2_plus1,
+max_threshold, center_cells, invert_log2, prune_outliers) now use
+float64 for intermediate arithmetic. Public output contract
+(`result.cnv_matrix`, `result.cnv_matrix_fc`) still float32 —
+downcast happens only at result assembly in `pipeline.py`.
+
+Before / after on oligodendroglioma step-TSV fixtures:
+
+| Step | Before | After |
+|---|---|---|
+| step03 normalize | `max_diff < 1e-2` (4 relaxed) | **`< 1e-10` (4 bit-exact)** |
+| step04 log2_plus1 | `< 1e-5` (4 approximate) | **`< 1e-10` (4 bit-exact)** |
+| step08 subtract_ref | `< 1e-3` (4 relaxed) | **`< 1e-10` (4 bit-exact)** |
+| step09 max_threshold | `< 1e-6` (4 approximate) | **`< 1e-10` (4 bit-exact)** |
+| step11 center_cells | `< 1e-4` (4 approximate) | **`< 1e-10` (4 bit-exact)** |
+| step14 invert_log2 | `< 1e-4` (4 approximate) | **`< 1e-10` (4 bit-exact)** |
+| step16 prune_outliers | `< 1e-4` (4 approximate) | **`< 1e-10` (4 bit-exact)** |
+| step10 smooth | `< 1e-3` (4 relaxed) | `< 1e-3` (scipy `uniform_filter1d` accumulation; untightened — needs further investigation) |
+
+All `tests/test_r_parity.py` floors tightened to `1e-10` on the bit-exact steps.
+3 unit-test docstrings rewritten (subtract_ref / max_threshold / center_cells)
+to remove float32-dtype assertions: leaf functions return float64, public
+float32 contract is enforced at `result.cnv_matrix` assembly in
+`pipeline.py` only.
+
+**HMM i3 end-to-end Jaccard on oligodendroglioma: 0.976 (unchanged)**.
+The Phase 1 float64 precision is truncated back to float32 at
+`result.cnv_matrix` before Phase 2 consumes it, so the bit-exact gain
+does not propagate into HMM state calls. Plumbing Phase 2 to consume a
+float64 intermediate is the next-session work. See
+`docs/superpowers/HANDOFF_bit_exact.md` §8 for the handoff.
+
 ### Primary parity metric shift: Spearman ρ on CNV matrix
 
 Subcluster ARI on Leiden output is retired as a parity metric (Jason

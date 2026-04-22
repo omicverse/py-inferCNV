@@ -24,7 +24,9 @@ def test_invalid_method_raises():
         center_cells(np.zeros((1, 3), dtype=np.float32), method="mode")
 
 
-def test_dtype_float32():
+def test_dtype_is_floating_point():
+    """Phase 1 bit-exact path (2026-04-23): leaf returns float64; public
+    float32 contract enforced at result.cnv_matrix in pipeline.py."""
     X = np.zeros((3, 3), dtype=np.float64)
     out = center_cells(X, method="median")
-    assert out.dtype == np.float32
+    assert np.issubdtype(out.dtype, np.floating)

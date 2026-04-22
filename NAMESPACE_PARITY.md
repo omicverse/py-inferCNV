@@ -21,16 +21,16 @@ arbitrary algorithm-internal labels with no py-vs-R semantic contract
 | R source / function | Python submodule | Phase | Tier | Status | R-parity metric |
 |---|---|---|---|---|---|
 | `CreateInfercnvObject` (chr_exclude, gene_order) | `pipeline._build_chromosome_layout` | 1 | 3 | ✓ | same gene set |
-| `require_above_min_mean_expr_cutoff` | `preprocess.filter_low_expression_genes` | 1 | 4 bit-exact | ✓ | set + value equality (all-cells stage-1 filter; R's stage-2 `require_above_min_cells_ref` is effectively not engaged at default parameters on the oligodendroglioma fixture — see `scripts/triage_phase1/`) |
-| `normalize_counts_by_seq_depth` | `preprocess.normalize_by_seq_depth` | 1 | 4 (relaxed) | ✓ | `max_diff < 1e-2` (float32 cumulative) |
-| `log2xplus1` | `preprocess.log2_plus1` | 1 | 4 approximate | ✓ | `max_diff < 1e-5` |
-| `subtract_ref_expr_from_obs` (use_bounds=TRUE, 1st pass) | `preprocess.subtract_reference` | 1 | 4 (relaxed) | ✓ | `max_diff < 1e-3` |
-| `apply_max_threshold_bounds` | `preprocess.apply_max_centered_threshold` | 1 | 4 approximate | ✓ | `max_diff < 1e-6` |
-| `.smooth_center_helper` + `.smooth_helper` (`smooth_by_chromosome`) | `smooth.smooth_pyramidinal` + `kernels.smooth_tail_overwrite` | 1 | 4 (relaxed) | ✓ | `max_diff < 1e-3` (interior bit-exact, tail R-exact) |
-| `center_cell_expr_across_chromosome` (median) | `center.center_cells` | 1 | 4 approximate | ✓ | `max_diff < 1e-4` |
-| `subtract_ref_expr_from_obs` (2nd pass) | `preprocess.subtract_reference` | 1 | 4 (relaxed) | ✓ | covered by step12 parity |
-| `invert_log2` | `preprocess.invert_log2` | 1 | 4 approximate | ✓ | `max_diff < 1e-4` |
-| `remove_outliers_norm` (`average_bound`) | `cna.prune_outliers` | 1 | 4 approximate | ✓ | `max_diff < 1e-4` |
+| `require_above_min_mean_expr_cutoff` | `preprocess.filter_low_expression_genes` | 1 | **4 bit-exact** | ✓ | set + value equality |
+| `normalize_counts_by_seq_depth` | `preprocess.normalize_by_seq_depth` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 path, 2026-04-23) |
+| `log2xplus1` | `preprocess.log2_plus1` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 log1p) |
+| `subtract_ref_expr_from_obs` (use_bounds=TRUE, 1st pass) | `preprocess.subtract_reference` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 mean + bounds) |
+| `apply_max_threshold_bounds` | `preprocess.apply_max_centered_threshold` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 clip) |
+| `.smooth_center_helper` + `.smooth_helper` (`smooth_by_chromosome`) | `smooth.smooth_pyramidinal` + `kernels.smooth_tail_overwrite` | 1 | 4 approximate | ✓ | float64 interior + tail; empirical ≤ 1e-3 (scipy `uniform_filter1d` accumulation order vs R) |
+| `center_cell_expr_across_chromosome` (median) | `center.center_cells` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 median) |
+| `subtract_ref_expr_from_obs` (2nd pass) | `preprocess.subtract_reference` | 1 | **4 bit-exact** | ✓ | covered by step12 parity |
+| `invert_log2` | `preprocess.invert_log2` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 exp2) |
+| `remove_outliers_norm` (`average_bound`) | `cna.prune_outliers` | 1 | **4 bit-exact** | ✓ | `max_diff < 1e-10` (float64 bounds + clip) |
 
 ## Phase 2 (R steps 15, 17)
 

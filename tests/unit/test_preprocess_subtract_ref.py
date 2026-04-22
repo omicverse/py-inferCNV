@@ -26,10 +26,13 @@ def test_bounded_path_single_group_equivalent_to_mean_path():
     np.testing.assert_allclose(out_mean, out_bnd, atol=1e-6)
 
 
-def test_output_dtype_float32():
+def test_output_is_floating_point():
+    """Phase 1 bit-exact path (2026-04-23): internal arithmetic is float64.
+    Public output dtype is enforced at ``result.cnv_matrix`` assembly in
+    ``pipeline.py``, not at this leaf function."""
     X = np.ones((3, 3), dtype=np.float32)
     out = subtract_reference(X, ref_groups={"r": [0]}, use_bounds=False)
-    assert out.dtype == np.float32
+    assert np.issubdtype(out.dtype, np.floating)
 
 
 def test_proxy_normal_fallback_when_no_ref():

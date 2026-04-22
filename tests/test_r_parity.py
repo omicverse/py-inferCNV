@@ -156,9 +156,9 @@ def test_step03_normalize_parity():
     py_back = (py_out if not hasattr(py_out, "toarray") else py_out.toarray()).T
 
     diff = max_abs_diff(py_back.astype(np.float64), r_step03)
-    # Tier-4 approximate: float32 normalize accumulates ~1e-2 vs R's float64.
-    # README parity table will record this as "max_diff < 1e-2 (approximate)".
-    assert diff < 1e-2, f"normalize step03 max_diff={diff:.3e}"
+    # Phase 1 bit-exact path (2026-04-23): normalize is now float64 through
+    # all intermediates; empirical max_diff on oligo is ~5e-11.
+    assert diff < 1e-10, f"normalize step03 max_diff={diff:.3e}"
 
 
 # ============================================================================
@@ -171,9 +171,10 @@ def test_step03_normalize_parity():
 def test_step04_log2_plus1_parity():
     r_step03, _, _ = _load_r_step("step03_normalized")
     r_step04, _, _ = _load_r_step("step04_logged")
-    py_out = log2_plus1(r_step03.T.astype(np.float32)).T  # (genes, cells) for compare
+    py_out = log2_plus1(r_step03.T).T  # (genes, cells) for compare
     diff = max_abs_diff(py_out.astype(np.float64), r_step04)
-    assert diff < 1e-5, f"log2_plus1 step04 max_diff={diff:.3e}"
+    # Phase 1 bit-exact path: float64 log1p; empirical ~5e-14 on oligo.
+    assert diff < 1e-10, f"log2_plus1 step04 max_diff={diff:.3e}"
 
 
 # ============================================================================
@@ -197,13 +198,13 @@ def test_step08_subtract_ref_parity(raw_counts, annotations, ref_cell_indices):
     for lab in ref_labels:
         ref_groups[lab] = [i for i, c in enumerate(r_cells) if annot_by_cell.get(c) == lab]
 
-    py_in = r_step04.T.astype(np.float32)  # (cells, genes)
+    py_in = r_step04.T  # (cells, genes) float64
     py_out = subtract_reference(py_in, ref_groups=ref_groups, use_bounds=True)
     py_back = py_out.T
 
     diff = max_abs_diff(py_back.astype(np.float64), r_step08)
-    # bounded subtract is sensitive to float32 precision in mean computation
-    assert diff < 1e-3, f"subtract_ref step08 max_diff={diff:.3e}"
+    # Phase 1 bit-exact path: mean + bounds in float64.
+    assert diff < 1e-10, f"subtract_ref step08 max_diff={diff:.3e}"
 
 
 # ============================================================================
@@ -216,9 +217,10 @@ def test_step08_subtract_ref_parity(raw_counts, annotations, ref_cell_indices):
 def test_step09_max_threshold_parity():
     r_step08, _, _ = _load_r_step("step08_subtracted")
     r_step09, _, _ = _load_r_step("step09_clipped")
-    py_out = apply_max_centered_threshold(r_step08.T.astype(np.float32), threshold=3.0).T
+    py_out = apply_max_centered_threshold(r_step08.T, threshold=3.0).T
     diff = max_abs_diff(py_out.astype(np.float64), r_step09)
-    assert diff < 1e-6, f"max_threshold step09 max_diff={diff:.3e}"
+    # Phase 1 bit-exact: np.clip in float64 is exact.
+    assert diff < 1e-10, f"max_threshold step09 max_diff={diff:.3e}"
 
 
 # ============================================================================
@@ -232,10 +234,10 @@ def test_step11_center_cells_parity():
     r_step10, _, _ = _load_r_step("step10_smoothed")
     r_step11, _, _ = _load_r_step("step11_centered")
     # Note: R centers across ALL chromosomes per cell (one median per cell).
-    py_out = center_cells(r_step10.T.astype(np.float32), method="median").T
+    py_out = center_cells(r_step10.T, method="median").T
     diff = max_abs_diff(py_out.astype(np.float64), r_step11)
-    # median is exact in float64; small drift from float32 cast
-    assert diff < 1e-4, f"center_cells step11 max_diff={diff:.3e}"
+    # Phase 1 bit-exact: median + subtract in float64.
+    assert diff < 1e-10, f"center_cells step11 max_diff={diff:.3e}"
 
 
 # ============================================================================
@@ -249,9 +251,10 @@ def test_step14_invert_log2_parity():
     """R run() step 14: invert_log2 on log-space subtracted2 -> linear FC."""
     r_step12, _, _ = _load_r_step("step12_subtracted2")
     r_step14, _, _ = _load_r_step("step14_invert")
-    py_out = invert_log2(r_step12.T.astype(np.float32)).T
+    py_out = invert_log2(r_step12.T).T
     diff = max_abs_diff(py_out.astype(np.float64), r_step14)
-    assert diff < 1e-4, f"invert_log2 step14 max_diff={diff:.3e}"
+    # Phase 1 bit-exact: np.exp2 in float64.
+    assert diff < 1e-10, f"invert_log2 step14 max_diff={diff:.3e}"
 
 
 @pytest.mark.skipif(not _r_step_available("step14_invert"),
@@ -317,9 +320,10 @@ def test_step16_outlier_prune_parity():
     """G3 Q5 fix: outlier_prune operates on LINEAR FC (after step 14 invert)."""
     r_step14, _, _ = _load_r_step("step14_invert")
     r_step16, _, _ = _load_r_step("step16_outlier_pruned")
-    py_out = prune_outliers(r_step14.T.astype(np.float32), method="average_bound").T
+    py_out = prune_outliers(r_step14.T, method="average_bound").T
     diff = max_abs_diff(py_out.astype(np.float64), r_step16)
-    assert diff < 1e-4, f"outlier_prune step16 max_diff={diff:.3e}"
+    # Phase 1 bit-exact: bounds + clip in float64.
+    assert diff < 1e-10, f"outlier_prune step16 max_diff={diff:.3e}"
 
 
 # ============================================================================

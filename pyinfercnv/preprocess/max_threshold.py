@@ -15,7 +15,7 @@ def apply_max_centered_threshold(
 ) -> np.ndarray:
     """Clip X to [-threshold, +threshold]. Pass threshold=None to disable."""
     if threshold is None:
-        return np.asarray(X, dtype=np.float32)
+        return np.asarray(X, dtype=np.float64)
     if isinstance(threshold, str):
         if threshold == "auto":
             raise NotImplementedError("threshold='auto' not implemented in Phase 1")
@@ -23,5 +23,5 @@ def apply_max_centered_threshold(
     t = float(threshold)
     if t <= 0:
         raise ValueError(f"threshold must be > 0, got {t}")
-    Xc = np.asarray(X, dtype=np.float32)
+    Xc = np.asarray(X, dtype=np.float64)
     return np.clip(Xc, -t, t)

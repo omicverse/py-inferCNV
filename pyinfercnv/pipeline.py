@@ -194,9 +194,12 @@ def infercnv(
     if ref_counts_raw is not None:
         ref_counts_raw = ref_counts_raw[:, gene_perm_local]
 
-    # Densify (Phase 1: full matrix; Phase 1.5 will move to per-chrom chunks)
+    # Densify (Phase 1: full matrix; Phase 1.5 will move to per-chrom chunks).
+    # Phase 1 bit-exact path (2026-04-23): float64 through all intermediate
+    # steps; final cast to float32 happens only at result.cnv_matrix
+    # assembly (end of function) for the public downstream contract.
     t0 = time.perf_counter(); rss = _rss_mb()
-    X_dense = X.toarray().astype(np.float32) if sp.issparse(X) else np.ascontiguousarray(X, dtype=np.float32)
+    X_dense = X.toarray().astype(np.float64) if sp.issparse(X) else np.ascontiguousarray(X, dtype=np.float64)
     _profile_block(profile, "06_densify", t0, rss)
 
     # Reference groups

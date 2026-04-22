@@ -15,6 +15,9 @@ use_bounds=False (or K==1):
 R applies subtract on ALL cells (including reference cells themselves) per
 inferCNV_ops.R:1742-1786 — reference cells therefore become close-to-zero
 after subtraction.
+
+Dtype policy (Phase 1 bit-exact, 2026-04-23): intermediate arithmetic is
+float64 throughout. The pipeline downcasts to float32 at result assembly.
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ import numpy as np
 
 
 def _compute_ref_group_means(X: np.ndarray, ref_groups: Mapping[str, Sequence[int]]) -> np.ndarray:
-    """Return (K, n_genes) array of per-group per-gene means."""
+    """Return (K, n_genes) array of per-group per-gene means (float64)."""
     K = len(ref_groups)
     out = np.empty((K, X.shape[1]), dtype=np.float64)
     for k, idx in enumerate(ref_groups.values()):
@@ -44,15 +47,15 @@ def subtract_reference(
     Parameters
     ----------
     X
-        Dense float32 cells x genes. Modified-by-copy (returns new array).
+        Dense cells x genes array. Float64 preferred for bit-exact parity;
+        float32 still accepted but loses the last 1e-10 of precision.
     ref_groups
         Mapping group_label -> list of cell row indices that form that ref group.
     use_bounds
         If True and len(ref_groups)>1, subtract per spec bounds rule. If False,
         subtract grand mean across all ref cells.
     """
-    Xc = np.asarray(X, dtype=np.float32)
-    n_genes = Xc.shape[1]
+    Xc = np.asarray(X, dtype=np.float64)
 
     if not ref_groups:
         raise ValueError("ref_groups must be non-empty")
@@ -60,8 +63,8 @@ def subtract_reference(
     means = _compute_ref_group_means(Xc, ref_groups)
 
     if use_bounds and means.shape[0] > 1:
-        bounds_min = means.min(axis=0).astype(np.float32)
-        bounds_max = means.max(axis=0).astype(np.float32)
+        bounds_min = means.min(axis=0)
+        bounds_max = means.max(axis=0)
         out = np.zeros_like(Xc)
         above = Xc > bounds_max
         below = Xc < bounds_min
@@ -69,5 +72,5 @@ def subtract_reference(
         out[below] = (Xc - bounds_min)[below]
         return out
 
-    grand_mean = means.mean(axis=0).astype(np.float32)
-    return (Xc - grand_mean).astype(np.float32)
+    grand_mean = means.mean(axis=0)
+    return Xc - grand_mean

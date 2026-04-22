@@ -30,25 +30,26 @@ def smooth_pyramidinal(X: np.ndarray, *, window_length: int = 101) -> np.ndarray
     """
     if window_length < 3 or window_length % 2 == 0:
         raise ValueError(f"window_length must be odd and >= 3, got {window_length}")
-    X32 = np.ascontiguousarray(X, dtype=np.float32)
-    n_cells, n_genes = X32.shape
+    # Phase 1 bit-exact path (2026-04-23): float64 throughout.
+    X64 = np.ascontiguousarray(X, dtype=np.float64)
+    n_cells, n_genes = X64.shape
 
     if n_genes < 2:
-        return X32.copy()
+        return X64.copy()
 
     if n_genes < window_length:
         # R's tail-only behaviour: smooth_helper iterates ceil(n/2) positions
         # and overwrites both ends using the ORIGINAL data (no center pass).
-        out = X32.copy()
-        smooth_tail_overwrite(out, X32, window_length)
+        out = X64.copy()
+        smooth_tail_overwrite(out, X64, window_length)
         return out
 
     half_w = (window_length + 1) // 2
-    out = ndimage.uniform_filter1d(X32, size=half_w, axis=1, mode="nearest")
+    out = ndimage.uniform_filter1d(X64, size=half_w, axis=1, mode="nearest")
     out = ndimage.uniform_filter1d(out, size=half_w, axis=1, mode="nearest")
-    out = np.ascontiguousarray(out, dtype=np.float32)
+    out = np.ascontiguousarray(out, dtype=np.float64)
 
-    # R-exact tail: values drawn from the ORIGINAL input X32, not from the
+    # R-exact tail: values drawn from the ORIGINAL input X64, not from the
     # pre-smoothed `out`. Overwrites positions [0..tail-1] and [n-tail..n-1].
-    smooth_tail_overwrite(out, X32, window_length)
+    smooth_tail_overwrite(out, X64, window_length)
     return out
