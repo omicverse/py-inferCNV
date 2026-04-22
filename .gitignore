@@ -11,6 +11,9 @@ htmlcov/
 .DS_Store
 tests/r_out/
 benchmarks/**/py_out/
+# Phase 2 benchmark harness outputs regenerate from scripts/phase2_benchmark/;
+# the source of truth is the harness, not the TSV dumps or per-patient r_out.
+benchmarks/phase2/
 examples/*.executed.ipynb.bak
 /tmp_*
 
