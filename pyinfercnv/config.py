@@ -64,6 +64,16 @@ class InferCNVConfig:  # noqa: N801
     # matches R behaviour.
     cluster_by_groups: bool = True
 
+    # --- Phase 2 Leiden stability knobs (Track A closeout, default off) ---
+    # n_seeds > 1 runs Leiden N times with seeds (random_state,
+    # random_state+1, …) and returns the highest-CPM partition (``rbest``).
+    # Default 1 = R-parity behaviour.
+    tumor_subcluster_n_seeds: int = 1  # noqa: N815
+    # min_subcluster_size: if set, merge clusters with < N cells into
+    # their nearest non-small cluster via KNN majority vote. Default
+    # None = off; R has no such cleanup. Non-CPM-optimal by design.
+    tumor_subcluster_min_size: int | None = None  # noqa: N815
+
     # --- misc ---
     lfc_clip: float = 3.0
     denoise: bool = False
@@ -98,4 +108,23 @@ class InferCNVConfig:  # noqa: N801
                 f"tumor_subcluster_partition_method must be one of "
                 f"('leiden', 'random_trees', 'qnorm'), "
                 f"got {self.tumor_subcluster_partition_method!r}"
+            )
+        if self.analysis_mode != "subclusters":
+            # "samples" and "cells" modes are Phase 3 work; fail loudly
+            # rather than silently accept and quietly run subclusters.
+            raise ValueError(
+                f"analysis_mode={self.analysis_mode!r} not yet supported; "
+                "only 'subclusters' is implemented in Phase 2."
+            )
+        if self.tumor_subcluster_n_seeds < 1:
+            raise ValueError(
+                f"tumor_subcluster_n_seeds must be >= 1, got {self.tumor_subcluster_n_seeds}"
+            )
+        if (
+            self.tumor_subcluster_min_size is not None
+            and self.tumor_subcluster_min_size < 1
+        ):
+            raise ValueError(
+                "tumor_subcluster_min_size must be >= 1 or None, "
+                f"got {self.tumor_subcluster_min_size}"
             )

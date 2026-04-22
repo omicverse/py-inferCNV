@@ -178,9 +178,12 @@ def run_phase2(
     config
         :class:`InferCNVConfig`. Fields honoured:
         ``HMM``, ``HMM_type``, ``HMM_transition_prob``, ``HMM_i3_pval``,
-        ``tumor_subcluster_partition_method`` (future field in Phase 2;
-        default "leiden" via helper), ``analysis_mode``, ``cutoff``,
-        ``window_length`` (for hspike replay), plus the preprocess knobs.
+        ``tumor_subcluster_partition_method`` (default "leiden"),
+        ``tumor_subcluster_n_seeds`` (``rbest`` if >1; default 1),
+        ``tumor_subcluster_min_size`` (small-cluster merge; default None),
+        ``analysis_mode`` (must be "subclusters" in Phase 2; "samples"
+        and "cells" are Phase 3), ``cutoff``, ``window_length`` (for hspike replay),
+        plus the preprocess knobs.
     reference_key, reference_cat
         **Optional in all modes.** When supplied and both
         ``cluster_by_groups=True`` and ``HMM_type=="i6"``, the pair drives
@@ -404,7 +407,14 @@ def _run_subclustering(
     def _partition(X: NDArray[np.float32]) -> NDArray[np.int32]:
         if method == "leiden":
             from pyinfercnv.subcluster.leiden import leiden_subcluster
-            return leiden_subcluster(X, random_state=random_state)
+            return leiden_subcluster(
+                X,
+                random_state=random_state,
+                n_seeds=int(getattr(config, "tumor_subcluster_n_seeds", 1)),
+                min_subcluster_size=getattr(
+                    config, "tumor_subcluster_min_size", None
+                ),
+            )
         if method == "random_trees":
             from pyinfercnv.subcluster.random_trees import random_tree_subcluster
             return random_tree_subcluster(X, random_state=random_state)

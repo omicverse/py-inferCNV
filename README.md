@@ -123,6 +123,44 @@ validation benchmark — cell-type annotations from 3CA upstream are
 used as-is on both sides, so any imperfection in those labels is
 shared by py and R and cannot be used to adjudicate correctness.
 
+**Track A closeout — Leiden parity-in-distribution.** Phase 2 Leiden
+on kilocell 10x UMI inputs produced single-draw ARIs in the 0.4–0.8
+range (DCIS1 0.447, TNBC1 0.592, TNBC3 0.840). A diagnostic sweep
+(10 seeds × 2 patients × graph variants; see
+`benchmarks/phase2/Gao2021_Breast/track_a_summary.md`) showed:
+
+- **KNN edge-set parity**: py `sklearn.NearestNeighbors(brute)` vs R
+  `RANN::nn2` yielded Jaccard 1.0000 on all three 3CA patients; scipy
+  `cKDTree` and sklearn `kd_tree` also Jaccard 1.0000. KNN is not a
+  source of divergence.
+- **Leiden self-noise**: R's own `cluster_leiden` across 10 seeds on
+  the same graph has ARI 0.47±0.12 (DCIS1), 0.67±0.10 (TNBC1),
+  0.77±0.29 (TNBC3) vs its step15 baseline. The DCIS1 0.447 that
+  looked like a divergence is a single-draw observation inside R's
+  own 1-σ noise floor.
+- **py's Leiden in distribution**: ARI 0.47±0.14 (DCIS1, Δ=-0.007),
+  0.73±0.09 (TNBC1, Δ=+0.064), 0.92±0.04 (TNBC3, Δ=+0.149) vs same
+  baseline. No observed systematic gap.
+- **CPM objective**: manual `Q = Σ_c [e_c − γ n_c(n_c−1)/2]`
+  computed on R's graph for a DCIS1 seed-0 pair gave py 10744 vs R
+  10724. Py finds equal-or-higher Leiden local optima on the same
+  graph.
+
+Per-seed identity across R and Python RNGs is not a contract —
+R-igraph seeds through R's Mersenne-Twister + C PCG32, python-igraph
+seeds through Python's `random.Random` bridge, feeding different
+bytes into the same C Leiden core. Distribution-level equivalence on
+measured fixtures is the contract.
+
+Two optional stability knobs are available (both default **off**):
+- `InferCNVConfig.tumor_subcluster_n_seeds` (`int`, default 1): if
+  >1, run Leiden N times with `random_state, random_state+1, …` and
+  return the partition with the highest CPM (`rbest`).
+- `InferCNVConfig.tumor_subcluster_min_size` (`int | None`, default
+  None): merge any cluster smaller than this size into its nearest
+  non-small cluster via KNN majority vote. **Non-CPM-optimal** —
+  trades a small objective loss for downstream HMM stability.
+
 Full crosswalk in [NAMESPACE_PARITY.md](NAMESPACE_PARITY.md).
 
 ## Testing
