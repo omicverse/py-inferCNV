@@ -30,18 +30,22 @@ from sklearn.metrics import adjusted_rand_score
 # State coding convention (ground truth from observation + pipeline_phase2.py):
 #   R output: 1-indexed. i3 = {1=loss, 2=neutral, 3=gain}. i6 = {1..6, 3=neutral}.
 #   Python output: 0-indexed. i3 = {0=loss, 1=neutral, 2=gain}. i6 = {0..5, 2=neutral}.
-# compare_py_vs_r auto-detects by checking the min value of each matrix.
+# Callers pass side="py" or side="r"; auto-detection on min(mat) is unsafe
+# because a patient whose HMM never visits state 0 (e.g. no deep-loss bin on
+# i6) has py_min=1 and would be misclassified as 1-indexed. Hit on
+# Gao2021_Breast/DCIS1 i6 — Jaccard collapsed from ~0.86 (true) to 0.27
+# (misaligned neutral). Fix: explicit side lookup, no min() inference.
 _R_NEUTRAL = {"i6": 3, "i3": 2}
 _PY_NEUTRAL = {"i6": 2, "i3": 1}
 
 
-def _neutral_for(mat, hmm_type: str) -> int:
-    """Return the neutral-state integer for `mat` (py or R), selected by whether
-    `mat` uses 0-indexed or 1-indexed state codes."""
-    mn = int(mat.min())
-    if mn == 0:
+def _neutral_for(side: str, hmm_type: str) -> int:
+    """Return neutral-state integer for `side` ∈ {"py", "r"} and hmm_type."""
+    if side == "py":
         return _PY_NEUTRAL[hmm_type]
-    return _R_NEUTRAL[hmm_type]
+    if side == "r":
+        return _R_NEUTRAL[hmm_type]
+    raise ValueError(f"side must be 'py' or 'r', got {side!r}")
 
 
 def _load_tsv_matrix(path: Path) -> pd.DataFrame:
@@ -66,8 +70,8 @@ def compare_jaccard(py_tsv: Path, r_tsv: Path, hmm_type: str) -> dict:
     py_m = py.loc[shared_genes, shared_cells].to_numpy(dtype=np.int8).T  # cells × genes
     r_m = r.loc[shared_genes, shared_cells].to_numpy(dtype=np.int8).T
 
-    py_neutral = _neutral_for(py_m, hmm_type)
-    r_neutral = _neutral_for(r_m, hmm_type)
+    py_neutral = _neutral_for("py", hmm_type)
+    r_neutral = _neutral_for("r", hmm_type)
     jaccards = []
     for i in range(py_m.shape[0]):
         py_nn = set(int(x) for x in np.where(py_m[i] != py_neutral)[0])
