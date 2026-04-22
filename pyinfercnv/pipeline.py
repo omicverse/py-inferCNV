@@ -158,10 +158,16 @@ def infercnv(
     _profile_block(profile, "02_capture_ref_raw", t0, rss)
 
     # Step 2 — filter genes (mean cutoff + min cells)
+    # Option 1 (2026-04-22): population is all cells, mirroring R's
+    # require_above_min_mean_expr_cutoff which runs on the full matrix.
+    # Passing reference_cell_idx=ref_idx_all here collapsed the filter to
+    # ref-only and dropped ~1559 genes (8508 → 6949) that R keeps. R's
+    # secondary require_above_min_cells_ref stage is not applied under
+    # default parameters on the oligodendroglioma fixture — verified by
+    # tmp_phase1_gap_probe.py [A] mode matching R step02 bit-exact.
     t0 = time.perf_counter(); rss = _rss_mb()
     keep = filter_low_expression_genes(
         X, cutoff=cfg.cutoff, min_cells_per_gene=cfg.min_cells_per_gene,
-        reference_cell_idx=ref_idx_all if len(ref_idx_all) > 0 else None,
     )
     X = X[:, keep] if sp.issparse(X) else X[:, keep]
     var_kept = adata.var.iloc[np.where(keep)[0]].copy()

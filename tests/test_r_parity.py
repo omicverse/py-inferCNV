@@ -524,10 +524,12 @@ def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
     if len(common_cells) == 0:
         pytest.skip("No overlapping cell ids between Python output and R TSV")
 
-    # Reconstruct pipeline gene ordering: filter_genes (ref-cells only) -> chr-sorted
-    ref_idx = np.where(adata.obs["celltype"].isin(ref_cats).to_numpy())[0].tolist()
+    # Reconstruct pipeline gene ordering: filter_genes (all cells) -> chr-sorted.
+    # 2026-04-22: pipeline.py no longer passes reference_cell_idx to the
+    # low-expression filter (Option 1 fix for Phase 1 gene-set divergence);
+    # this reconstruction must follow suit, else gene_idx alignment breaks.
     try:
-        py_gene_names = _get_pipeline_gene_names(adata, reference_cell_idx=ref_idx)
+        py_gene_names = _get_pipeline_gene_names(adata)
     except Exception as exc:
         pytest.skip(f"Cannot reconstruct pipeline gene order: {exc}")
 
@@ -607,10 +609,12 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
     if len(common_cells) == 0:
         pytest.skip("No overlapping cell ids between Python output and R TSV")
 
-    # Reconstruct pipeline gene ordering: filter_genes (ref-cells only) -> chr-sorted
-    ref_idx = np.where(adata.obs["celltype"].isin(ref_cats).to_numpy())[0].tolist()
+    # Reconstruct pipeline gene ordering: filter_genes (all cells) -> chr-sorted.
+    # 2026-04-22: pipeline.py no longer passes reference_cell_idx to the
+    # low-expression filter (Option 1 fix for Phase 1 gene-set divergence);
+    # this reconstruction must follow suit, else gene_idx alignment breaks.
     try:
-        py_gene_names = _get_pipeline_gene_names(adata, reference_cell_idx=ref_idx)
+        py_gene_names = _get_pipeline_gene_names(adata)
     except Exception as exc:
         pytest.skip(f"Cannot reconstruct pipeline gene order: {exc}")
 
