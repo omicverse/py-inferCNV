@@ -270,12 +270,16 @@ def infercnv(
     is_ref[ref_idx_all] = True
     cell_meta = pd.DataFrame({"is_reference": is_ref}, index=adata.obs_names)
 
+    # Keep `smoothed` (float64) as companion so Phase 2 can consume it
+    # without the float32 precision drop. Nulled after Phase 2 or, when
+    # HMM is off, dropped before returning to save memory (see below).
     result = InferCNVResult(
         chr_pos=chr_pos,
         cnv_matrix=smoothed.astype(np.float32),
         cnv_matrix_fc=cnv_fc.astype(np.float32),
         cell_meta=cell_meta,
         ref_counts_raw=ref_counts_raw,
+        cnv_matrix_f64=smoothed,
         profile=profile,
     )
 
@@ -287,6 +291,11 @@ def infercnv(
             reference_key=reference_key, reference_cat=reference_cat,
             random_state=0, profile=profile,
         )
+
+    # Drop the transient float64 companion once Phase 2 has consumed it
+    # (or immediately when Phase 2 was not requested) — it is never
+    # persisted to AnnData and external consumers must not rely on it.
+    result.cnv_matrix_f64 = None
 
     if inplace:
         result.write_to_anndata(adata, key_added=key_added)

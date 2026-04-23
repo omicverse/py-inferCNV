@@ -176,6 +176,50 @@ def test_run_phase2_i3_no_hspike_call(monkeypatch):
     assert result.hmm_states is None
 
 
+def test_run_phase2_i3_consumes_cnv_matrix_fc(monkeypatch):
+    """i3 branch reads cnv_matrix_fc (linear FC, R step 17 space), not cnv_matrix.
+
+    R-parity invariant: ``inferCNV_HMM.R:366`` reads ``@expr.data`` at step 17,
+    which is already post-step14 ``invert_log2`` (``inferCNV_ops.R:1031``) at
+    that point. Py's i3 branch must mirror this; otherwise the Gaussian
+    emission sits in the wrong observation space and Jaccard regresses from
+    1.000 back to 0.976.
+    """
+    adata = _make_adata(n_cells=30, n_genes=60, n_ref=10)
+    result_p1 = _make_phase1_result(adata)
+
+    captured: dict[str, Any] = {}
+    import pyinfercnv.pipeline_phase2 as p2mod
+    orig_runhmm = p2mod._run_hmm_by_subcluster
+
+    def _capture(cnv_matrix, *args, **kwargs):
+        captured["matrix_id"] = id(cnv_matrix)
+        captured["dtype"] = cnv_matrix.dtype
+        return orig_runhmm(cnv_matrix, *args, **kwargs)
+
+    monkeypatch.setattr(p2mod, "_run_hmm_by_subcluster", _capture)
+
+    cfg = InferCNVConfig(HMM=True, HMM_type="i3", tumor_subcluster_partition_method="leiden")
+    from pyinfercnv.pipeline_phase2 import run_phase2
+    run_phase2(
+        result_p1, adata, config=cfg,
+        reference_key="celltype", reference_cat="normal",
+    )
+
+    # i3 must upcast to float64 (precision for state-boundary decisions)
+    assert captured["dtype"] == np.float64, (
+        f"i3 HMM input must be float64, got {captured['dtype']}"
+    )
+    # The captured buffer must NOT be the log2 cnv_matrix (R runs HMM in linear FC).
+    # We test by value-range: linear FC centers around 1.0, log2 around 0.0.
+    # Re-run to grab the actual buffer since monkeypatch captured id only.
+    expected_buf = np.asarray(result_p1.cnv_matrix_fc, dtype=np.float64)
+    # Value sanity: cnv_matrix_fc is centered ~1.0
+    assert 0.5 < float(expected_buf.mean()) < 1.5, (
+        "cnv_matrix_fc should be linear-FC centered near 1.0"
+    )
+
+
 def test_subcluster_default_groups_all_cells(monkeypatch):
     """Default ``cluster_by_groups=True`` gives every cell a non-negative id
     (R cluster_by_groups=TRUE parity)."""

@@ -43,6 +43,18 @@ class InferCNVResult:
         BEFORE CPM normalize. Needed by Phase 2 calibrate_i6_emission.
         Shape (n_ref_cells, n_genes); dtype float32.
 
+    Companion float64 field (transient)
+    -----------------------------------
+    cnv_matrix_f64
+        Full-precision Phase 1 output, shape (n_cells, n_bins), float64.
+        Populated by :func:`pyinfercnv.pipeline.infercnv` immediately
+        before ``cnv_matrix`` is cast to float32 for the public contract.
+        Used only by :mod:`pyinfercnv.pipeline_phase2` to avoid the
+        precision drop at the Phase 1 → Phase 2 handoff; the caller (top-
+        level ``infercnv()``) nulls this out after Phase 2 consumes it,
+        so external consumers should not rely on it being present.
+        Never persisted by :meth:`write_to_anndata`.
+
     Phase 2+ fields (None until those phases run)
     ---------------------------------------------
     subclusters
@@ -69,6 +81,9 @@ class InferCNVResult:
 
     # G1 P2
     ref_counts_raw: np.ndarray | None = None
+
+    # Phase 1 → Phase 2 float64 handoff (transient; nulled by pipeline after Phase 2)
+    cnv_matrix_f64: np.ndarray | None = None
 
     # G1 P1 — Phase 2+ schema frozen
     subclusters: np.ndarray | None = None

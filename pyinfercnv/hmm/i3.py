@@ -77,7 +77,11 @@ def estimate_i3_state_params(
     Parameters
     ----------
     cnv_matrix
-        Shape (n_cells, n_bins). In log2-space (centered).
+        Shape (n_cells, n_bins). **Space is scale-agnostic**: the R port
+        feeds linear-FC (post-step14 invert_log2, post-step16 outlier_prune)
+        for parity with ``inferCNV_HMM.R``, but any centred continuous
+        matrix works — mu/sigma/mean_delta are all estimated from the
+        reference subset of this matrix.
     reference_cell_idx
         Integer indices or boolean mask of reference ("normal") cells.
     i3_p_val
@@ -130,9 +134,11 @@ def predict_i3(  # noqa: N802
     States: 0 = DEL, 1 = neutral, 2 = AMP.
 
     Parameters mirror `predict_i6`. If `state_mus` / `state_sigmas` are None,
-    they fall back to conservative proxies (symmetric around 0 in log2
-    space). Callers should normally call `estimate_i3_state_params` first
-    to fit params from the reference cells.
+    they fall back to conservative proxies (symmetric around 0, behaving
+    as a log2-space default). Callers should normally call
+    `estimate_i3_state_params` first to fit params from the reference
+    cells in the same observation space as ``cnv_matrix``. For R parity,
+    Phase 2 feeds linear-FC input and estimates mus/sigmas in that space.
     """
     cnv_matrix = np.asarray(cnv_matrix)
     if cnv_matrix.ndim != 2:

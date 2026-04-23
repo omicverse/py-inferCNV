@@ -91,6 +91,12 @@ Matrix layout
 -------------
 * ``cnv_matrix`` input: ``(n_cells, n_bins)`` float32 C-order (from
   :attr:`InferCNVResult.cnv_matrix`, the log2-FC smoothed/centered matrix).
+  **R-parity note (i3)**: Phase 2's i3 branch re-reads
+  :attr:`InferCNVResult.cnv_matrix_fc` (the post-step14 invert_log2,
+  post-step16 outlier-pruned linear FC matrix) because R's step 17 HMM
+  consumes ``@expr.data`` after those steps — see
+  ``inferCNV_ops.R:1031`` (step 14) and ``inferCNV_HMM.R:366``. i6 stays
+  on the log2 ``cnv_matrix`` until the companion hspike rewrite lands.
 * ``hmm_states`` / ``hmm_states_i3`` output: ``(n_cells, n_bins)`` int8.
 * ``subclusters`` output: ``(n_cells,)`` int32. When
   ``config.cluster_by_groups=True`` (default, R parity) every cell has a
@@ -245,7 +251,15 @@ def run_phase2(
         adata, reference_key, reference_cat, is_reference
     )
 
-    cnv_matrix = result_phase1.cnv_matrix
+    # Prefer the transient float64 companion when Phase 1 provided it
+    # (avoids the float32 precision drop at the Phase 1 → Phase 2 handoff).
+    # Falls back to the public float32 ``cnv_matrix`` for callers that
+    # re-run Phase 2 on a result whose companion was already nulled.
+    cnv_matrix = (
+        result_phase1.cnv_matrix_f64
+        if result_phase1.cnv_matrix_f64 is not None
+        else result_phase1.cnv_matrix
+    )
     chr_pos = result_phase1.chr_pos
 
     # Step 15 — subclustering. When reference_key is available we honour
@@ -300,13 +314,21 @@ def run_phase2(
         )
 
     elif hmm_type == "i3":
+        # R-parity: step 17 HMM runs in linear-FC space. R's main pipeline
+        # applies invert_log2 at step 14 (inferCNV_ops.R:1031) before step 17
+        # (inferCNV_HMM.R:366 reads @expr.data which is 2^x by then).
+        # i3's Gaussian emission on linear-FC matches R exactly once the
+        # reference mu/sigma are re-estimated in that space.
         import pyinfercnv.hmm.i3 as _i3
         ref_idx = np.where(is_reference)[0]
+        cnv_matrix_linear = np.asarray(
+            result_phase1.cnv_matrix_fc, dtype=np.float64
+        )
         mus, sigs = _i3.estimate_i3_state_params(
-            cnv_matrix, ref_idx, config.HMM_i3_pval
+            cnv_matrix_linear, ref_idx, config.HMM_i3_pval
         )
         hmm_states_i3 = _run_hmm_by_subcluster(
-            cnv_matrix, chr_pos, subclusters, is_reference,
+            cnv_matrix_linear, chr_pos, subclusters, is_reference,
             hmm_type="i3",
             transition_prob=config.HMM_transition_prob,
             i6_calibration=None,
@@ -327,7 +349,10 @@ def run_phase2(
     )
     _profile_block(profile, "18_cnv_regions", t0, rss0)
 
-    # Build new result — reuse Phase 1 arrays BY REFERENCE (G2 Q5)
+    # Build new result — reuse Phase 1 arrays BY REFERENCE (G2 Q5).
+    # Propagate cnv_matrix_f64 so the top-level pipeline can null it in
+    # one place (see pipeline.infercnv) rather than scattering the
+    # lifecycle across modules.
     result = InferCNVResult(
         chr_pos=result_phase1.chr_pos,
         cnv_matrix=result_phase1.cnv_matrix,
@@ -335,6 +360,7 @@ def run_phase2(
         cell_meta=result_phase1.cell_meta,
         gene_values=result_phase1.gene_values,
         ref_counts_raw=result_phase1.ref_counts_raw,
+        cnv_matrix_f64=result_phase1.cnv_matrix_f64,
         subclusters=subclusters,
         hmm_states=hmm_states_i6,
         hmm_states_i3=hmm_states_i3,

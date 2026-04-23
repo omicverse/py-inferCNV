@@ -711,13 +711,15 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
         neutral_py=1, neutral_r=1,
     )
     print(f"  step17 HMM i3 mean_jaccard={mean_jaccard:.3f}")
-    # Floor 0.90: regression detector, not a spec restatement.
-    # Observed at HEAD: 0.976 (post-Option-1 Phase 1 gene filter fix, commit 90eabe1).
-    # i3 is deterministic end-to-end per findings/2026-04-21-i3-triage-findings.md §3.1
-    # (three-seed reproducible at 0.7058345795493797 pre-fix; Option 1 lifts it to 0.976).
-    # 0.076 buffer absorbs future igraph C PRNG stream shifts across platforms.
-    # Known bad values: 0.750 (pre-Option-1), 0.706 (pre-C5/C6 fixes).
-    # Spec §5.2 tier-4 target ~0.95 is exceeded; floor deliberately under target.
-    assert mean_jaccard >= 0.90, (
-        f"step17 hmm_i3 mean_jaccard={mean_jaccard:.3f} below floor 0.90"
+    # Floor 0.99: regression detector, not a spec restatement.
+    # Observed at HEAD: 1.000 after switching Phase 2's i3 branch to consume
+    # cnv_matrix_fc (post-step14 invert_log2 + step16 outlier-prune linear FC).
+    # That lifted the metric from 0.976 → 1.0000 on the oligodendroglioma
+    # fixture (see HANDOFF_bit_exact.md diagnostic and inferCNV_HMM.R:366
+    # which reads @expr.data in linear-FC space at step 17).
+    # 0.01 buffer absorbs future igraph C PRNG stream shifts / smooth
+    # accumulation drift. Known bad values: 0.976 (log2-space HMM input),
+    # 0.750 (pre-Option-1), 0.706 (pre-C5/C6 fixes).
+    assert mean_jaccard >= 0.99, (
+        f"step17 hmm_i3 mean_jaccard={mean_jaccard:.3f} below floor 0.99"
     )
