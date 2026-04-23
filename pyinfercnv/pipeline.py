@@ -180,6 +180,16 @@ def infercnv(
     X = normalize_by_seq_depth(X)
     _profile_block(profile, "04_normalize", t0, rss)
 
+    # R-parity hspike source snapshot: post-filter + post-normalize +
+    # pre-log2. Mirrors infercnv_obj@expr.data at the moment R calls
+    # .build_and_add_hspike (inferCNV_ops.R:586-595). Dense float32 copy
+    # (hspike is always built on a small synthetic matrix, so this is a
+    # one-off ~MB on oligo). Nulled after Phase 2.
+    if sp.issparse(X):
+        cpm_matrix_f32: np.ndarray | None = X.toarray().astype(np.float32, copy=False)
+    else:
+        cpm_matrix_f32 = np.ascontiguousarray(X, dtype=np.float32)
+
     # Step 4 — log2(x+1)
     t0 = time.perf_counter(); rss = _rss_mb()
     X = log2_plus1(X)
@@ -271,8 +281,10 @@ def infercnv(
     cell_meta = pd.DataFrame({"is_reference": is_ref}, index=adata.obs_names)
 
     # Keep `smoothed` (float64) as companion so Phase 2 can consume it
-    # without the float32 precision drop. Nulled after Phase 2 or, when
-    # HMM is off, dropped before returning to save memory (see below).
+    # without the float32 precision drop. Keep `cpm_matrix_f32` as the
+    # R-parity hspike input (post-filter, post-normalize, pre-log2 full
+    # matrix; consumed by calibrate_i6_emission at step 16). Both nulled
+    # after Phase 2 or, when HMM is off, dropped before returning.
     result = InferCNVResult(
         chr_pos=chr_pos,
         cnv_matrix=smoothed.astype(np.float32),
@@ -280,6 +292,7 @@ def infercnv(
         cell_meta=cell_meta,
         ref_counts_raw=ref_counts_raw,
         cnv_matrix_f64=smoothed,
+        cpm_matrix_f32=cpm_matrix_f32,
         profile=profile,
     )
 
@@ -292,10 +305,12 @@ def infercnv(
             random_state=0, profile=profile,
         )
 
-    # Drop the transient float64 companion once Phase 2 has consumed it
-    # (or immediately when Phase 2 was not requested) — it is never
-    # persisted to AnnData and external consumers must not rely on it.
-    result.cnv_matrix_f64 = None
+    # Drop the transient companion fields once Phase 2 has consumed them.
+    # When HMM is off we preserve them so a downstream caller can still
+    # run ``run_phase2`` piecewise without rebuilding Phase 1.
+    if cfg.HMM:
+        result.cnv_matrix_f64 = None
+        result.cpm_matrix_f32 = None
 
     if inplace:
         result.write_to_anndata(adata, key_added=key_added)

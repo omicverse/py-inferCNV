@@ -83,8 +83,12 @@ def _make_fake_calibration(n_states: int = 6) -> Any:
             n = max(1, num_cells)
             return np.exp(self.sd_log_slope * np.log(n) + self.sd_log_intercept)
 
-    mus = np.log2(I6_CNV_LEVELS.astype(np.float64) + 1e-9)
-    sigmas = np.full(n_states, 0.5, dtype=np.float64)
+    # R-parity: HspikeCalibration now lives in linear-FC space
+    # (post-step14 invert_log2). Fake mus are the raw CN levels, matching
+    # the empirical-mean-from-hspike semantics. Sigmas are conservative
+    # relative to the mu spacing so Viterbi still finds the neutral state.
+    mus = I6_CNV_LEVELS.astype(np.float64).copy()
+    sigmas = np.full(n_states, 0.3, dtype=np.float64)
     slope = np.full(n_states, -0.5, dtype=np.float64)
     intercept = np.log(sigmas)
     return FakeCalibration(
@@ -533,19 +537,25 @@ def test_zero_non_ref_raises():
         _run_subclustering(cnv_matrix, is_reference, config=cfg, random_state=0, profile=None)
 
 
-def test_i6_with_null_ref_counts_raises():
-    """i6 with ref_counts_raw=None -> ValueError."""
+def test_i6_with_null_cpm_matrix_raises():
+    """i6 with cpm_matrix_f32=None -> ValueError.
+
+    R-parity rewrite (2026-04-23): hspike calibration requires the
+    post-step3 normalize full-cell matrix (mirrors
+    ``inferCNV_hidden_spike.R:59`` reading ``@expr.data``). Phase 1
+    populates this on ``result.cpm_matrix_f32``; if the caller strips
+    it out before Phase 2 runs, i6 must bail with a clear message.
+    """
     adata = _make_adata(n_cells=30, n_genes=60, n_ref=10)
     result_p1 = _make_phase1_result(adata)
 
-    # Patch out ref_counts_raw
     import dataclasses
-    result_no_ref = dataclasses.replace(result_p1, ref_counts_raw=None)
+    result_no_cpm = dataclasses.replace(result_p1, cpm_matrix_f32=None)
 
     cfg = InferCNVConfig(HMM=True, HMM_type="i6")
     from pyinfercnv.pipeline_phase2 import run_phase2
-    with pytest.raises(ValueError, match="ref_counts_raw"):
+    with pytest.raises(ValueError, match="cpm_matrix_f32"):
         run_phase2(
-            result_no_ref, adata, config=cfg,
+            result_no_cpm, adata, config=cfg,
             reference_key="celltype", reference_cat="normal",
         )

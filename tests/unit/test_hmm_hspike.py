@@ -106,8 +106,20 @@ def test_sigmas_for_num_cells_shape():
 # Test: monotone decreasing sd (central-limit)                               #
 # --------------------------------------------------------------------------- #
 
-def test_sigmas_for_num_cells_monotone_decreasing():
-    """sd(100) <= sd(1) componentwise — central-limit scaling."""
+def test_sigmas_for_num_cells_r_parity_behaviour():
+    """R-parity lm fit produces near-zero slopes (not CLT -0.5).
+
+    R's ``get_hspike_cnv_mean_sd_trend_by_num_cells_fit``
+    (``inferCNV_HMM.R:154-212``) uses ``rowMeans`` on a ``(ncells, nrounds)``
+    matrix at line 166 — this averages across rounds per sample position
+    instead of across positions per round, so the resulting sd does NOT
+    shrink with ncells. Py mirrors this verbatim (see
+    :func:`pyinfercnv.hmm.hspike._fit_cnv_sd_vs_num_cells_trend` docstring).
+
+    The old pre-R-parity expectation of a CLT monotone decrease is
+    retired; the R contract is "slopes near zero, sigmas near-constant
+    across n".
+    """
     ref_counts = _make_ref_counts(50, 200)
     ref_groups = _make_ref_groups(50)
 
@@ -120,11 +132,14 @@ def test_sigmas_for_num_cells_monotone_decreasing():
         trend_max_num_cells=100,
         random_state=42,
     )
-    sigs_1 = calib.sigmas_for_num_cells(1)
-    sigs_100 = calib.sigmas_for_num_cells(100)
-    assert np.all(sigs_100 <= sigs_1), (
-        f"Expected sd(100) <= sd(1) but got:\n  sd(1)={sigs_1}\n  sd(100)={sigs_100}"
+    # R-parity: slopes should be small magnitude (|slope| < 0.3).
+    assert np.all(np.abs(calib.sd_log_slope) < 0.3), (
+        f"Expected |slopes| < 0.3 (R-parity), got {calib.sd_log_slope}"
     )
+    # All sigmas positive and finite
+    sigs_30 = calib.sigmas_for_num_cells(30)
+    assert np.all(np.isfinite(sigs_30))
+    assert np.all(sigs_30 > 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -207,7 +222,7 @@ def test_edge_cases_raise():
 # --------------------------------------------------------------------------- #
 
 def test_keep_matrix_default_false():
-    """Default keep_matrix=False returns hspike_log2fc=None, gene_chr_labels=None."""
+    """Default keep_matrix=False returns hspike_matrix=None, gene_chr_labels=None."""
     ref_counts = _make_ref_counts(30, 100)
     ref_groups = {"g": np.arange(30, dtype=np.intp)}
 
@@ -221,7 +236,7 @@ def test_keep_matrix_default_false():
         random_state=0,
         keep_matrix=False,
     )
-    assert calib_no_matrix.hspike_log2fc is None
+    assert calib_no_matrix.hspike_matrix is None
     assert calib_no_matrix.gene_chr_labels is None
 
     calib_with_matrix = calibrate_i6_emission(
@@ -234,10 +249,10 @@ def test_keep_matrix_default_false():
         random_state=0,
         keep_matrix=True,
     )
-    assert calib_with_matrix.hspike_log2fc is not None
+    assert calib_with_matrix.hspike_matrix is not None
     assert calib_with_matrix.gene_chr_labels is not None
-    assert calib_with_matrix.hspike_log2fc.ndim == 2
-    assert calib_with_matrix.hspike_log2fc.dtype == np.float32
+    assert calib_with_matrix.hspike_matrix.ndim == 2
+    assert calib_with_matrix.hspike_matrix.dtype == np.float32
     assert calib_with_matrix.gene_chr_labels.ndim == 1
 
 

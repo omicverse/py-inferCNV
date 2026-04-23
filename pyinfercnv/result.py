@@ -43,8 +43,18 @@ class InferCNVResult:
         BEFORE CPM normalize. Needed by Phase 2 calibrate_i6_emission.
         Shape (n_ref_cells, n_genes); dtype float32.
 
-    Companion float64 field (transient)
-    -----------------------------------
+    Companion R-parity fields (transient)
+    -------------------------------------
+    cpm_matrix_f32
+        Post-step2 gene-filter, post-step3 normalize-by-seq-depth matrix
+        (ALL cells incl. observation and reference; float32; pre-log2).
+        Populated by :func:`pyinfercnv.pipeline.infercnv` right after
+        ``normalize_by_seq_depth``. Consumed by
+        :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission` as the input
+        to R's ``.build_and_add_hspike`` (R reads
+        ``infercnv_obj@expr.data`` at step 3.1 — ``inferCNV_ops.R:586-595``).
+        Nulled after Phase 2; never persisted by :meth:`write_to_anndata`.
+
     cnv_matrix_f64
         Full-precision Phase 1 output, shape (n_cells, n_bins), float64.
         Populated by :func:`pyinfercnv.pipeline.infercnv` immediately
@@ -84,6 +94,12 @@ class InferCNVResult:
 
     # Phase 1 → Phase 2 float64 handoff (transient; nulled by pipeline after Phase 2)
     cnv_matrix_f64: np.ndarray | None = None
+
+    # R-parity hspike input: post-step2-filter, post-step3-normalize full expr matrix
+    # (ALL cells incl. obs and ref, log2 not yet applied). Mirror of R's
+    # ``infercnv_obj@expr.data`` state at the moment ``.build_and_add_hspike`` is
+    # called (``inferCNV_ops.R:586-595``). Transient, like ``cnv_matrix_f64``.
+    cpm_matrix_f32: np.ndarray | None = None
 
     # G1 P1 — Phase 2+ schema frozen
     subclusters: np.ndarray | None = None

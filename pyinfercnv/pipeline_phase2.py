@@ -281,30 +281,41 @@ def run_phase2(
     hmm_states_i3: NDArray[np.int8] | None = None
 
     if hmm_type == "i6":
-        if result_phase1.ref_counts_raw is None:
+        # R-parity hspike (2026-04-23 rewrite): hspike calibration now
+        # reads the post-filter post-normalize full expr matrix directly
+        # (cpm_matrix_f32), matching R's inferCNV_hidden_spike.R:59.
+        # HMM observation input is linear FC (cnv_matrix_fc, post-step14
+        # invert_log2 + step16 outlier_prune), matching R step 17.
+        if result_phase1.cpm_matrix_f32 is None:
             raise ValueError(
-                "config.HMM_type='i6' requires ref_counts_raw (hspike calibration), "
-                "but result_phase1.ref_counts_raw is None. "
-                "Ensure reference cells are present in the Phase 1 run."
+                "config.HMM_type='i6' requires result_phase1.cpm_matrix_f32 "
+                "(post-step3 normalize full-cell matrix). Phase 1 must be "
+                "re-run so the R-parity hspike input is captured."
             )
-        # G2 Q10 — remap global ref indices to local ref_counts_raw row indices
-        ref_groups_local = _remap_ref_groups_to_local(
-            adata, is_reference, reference_key, reference_cat
+
+        # Build reference + observation groups in GLOBAL cell indices
+        # (inferCNV_meanVarSim.R:180 pools obs + ref for meanvar/dropout fit).
+        ref_groups_global = _build_groups_from_obs(
+            adata, is_reference, reference_key, reference_cat, select_ref=True
         )
-        # Fallback: single group over all ref rows
-        if ref_groups_local is None:
-            n_ref = int(is_reference.sum())
-            ref_groups_local = {"normalsToUse": np.arange(n_ref, dtype=np.intp)}
+        obs_groups_global = _build_groups_from_obs(
+            adata, is_reference, reference_key, reference_cat, select_ref=False
+        )
 
         _t_hspike = time.perf_counter()
         _rss_hspike = _rss_mb()
         cal = _calibrate_hmm_emission(
-            result_phase1.ref_counts_raw, ref_groups_local,
+            result_phase1.cpm_matrix_f32, ref_groups_global,
+            observation_groups=obs_groups_global,
             config=config, random_state=random_state, profile=profile,
         )
         _profile_block(profile, "16_hspike_calibrate", _t_hspike, _rss_hspike)
+
+        cnv_matrix_linear_i6 = np.asarray(
+            result_phase1.cnv_matrix_fc, dtype=np.float64
+        )
         hmm_states_i6 = _run_hmm_by_subcluster(
-            cnv_matrix, chr_pos, subclusters, is_reference,
+            cnv_matrix_linear_i6, chr_pos, subclusters, is_reference,
             hmm_type="i6",
             transition_prob=config.HMM_transition_prob,
             i6_calibration=cal,
@@ -361,6 +372,7 @@ def run_phase2(
         gene_values=result_phase1.gene_values,
         ref_counts_raw=result_phase1.ref_counts_raw,
         cnv_matrix_f64=result_phase1.cnv_matrix_f64,
+        cpm_matrix_f32=result_phase1.cpm_matrix_f32,
         subclusters=subclusters,
         hmm_states=hmm_states_i6,
         hmm_states_i3=hmm_states_i3,
@@ -499,9 +511,10 @@ def _run_subclustering(
 
 
 def _calibrate_hmm_emission(
-    ref_counts_raw: NDArray[np.float32],
-    ref_groups_local: Mapping[str, NDArray[np.intp]] | None,
+    expr_data_normalized: NDArray[np.float32],
+    reference_groups: Mapping[str, NDArray[np.intp]] | None,
     *,
+    observation_groups: Mapping[str, NDArray[np.intp]] | None = None,
     config: "InferCNVConfig",
     random_state: int,
     profile: dict[str, Any] | None,
@@ -515,8 +528,9 @@ def _calibrate_hmm_emission(
     from pyinfercnv.hmm.hspike import calibrate_i6_emission  # late import — allows monkeypatching
 
     cal = calibrate_i6_emission(
-        ref_counts_raw,
-        ref_groups_local,
+        expr_data_normalized,
+        reference_groups,
+        observation_groups=observation_groups,
         config=config,
         sim_method="meanvar",
         aggregate_normals=False,
@@ -524,6 +538,50 @@ def _calibrate_hmm_emission(
         profile=profile,
     )
     return cal
+
+
+def _build_groups_from_obs(
+    adata: "AnnData",
+    is_reference: NDArray[np.bool_],
+    reference_key: str | None,
+    reference_cat: str | Sequence[str] | None,
+    *,
+    select_ref: bool,
+) -> dict[str, NDArray[np.intp]]:
+    """Return ``{group_name: np.ndarray of global cell indices}``.
+
+    When ``select_ref`` is True, builds reference groups from
+    ``adata.obs[reference_key]`` categories listed in ``reference_cat``.
+    When ``select_ref`` is False, builds observation (non-reference) groups
+    from the remaining categories. Falls back to a single pooled group
+    over the mask when the annotation isn't available.
+    """
+    if reference_key is None or reference_key not in adata.obs.columns:
+        mask = is_reference.astype(bool) if select_ref else (~is_reference.astype(bool))
+        idx = np.where(mask)[0].astype(np.intp)
+        if idx.size == 0:
+            return {}
+        name = "normalsToUse" if select_ref else "observationsToUse"
+        return {name: idx}
+
+    ref_cats = (
+        [reference_cat]
+        if isinstance(reference_cat, str)
+        else (list(reference_cat) if reference_cat is not None else [])
+    )
+    labels = adata.obs[reference_key].to_numpy()
+    all_cats = list(dict.fromkeys(labels.tolist()))
+    cats_wanted = (
+        [c for c in all_cats if c in set(ref_cats)]
+        if select_ref
+        else [c for c in all_cats if c not in set(ref_cats)]
+    )
+    groups: dict[str, NDArray[np.intp]] = {}
+    for c in cats_wanted:
+        idx = np.where(labels == c)[0].astype(np.intp)
+        if idx.size > 0:
+            groups[str(c)] = idx
+    return groups
 
 
 def _run_hmm_by_subcluster(
