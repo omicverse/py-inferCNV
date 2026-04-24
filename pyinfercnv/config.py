@@ -81,6 +81,10 @@ class InferCNVConfig:  # noqa: N801
     sd_amplifier: float = 1.5
     debug: bool = False
     num_threads: int = 4
+    # R-parity fixture scripts call set.seed(42). Python and R RNG streams are
+    # not bit-identical, but using the same public seed keeps stochastic Phase 2
+    # defaults aligned with the reference workflow.
+    random_state: int = 42
 
     def validate(self) -> None:
         if self.cutoff < 0:

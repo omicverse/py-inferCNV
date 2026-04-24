@@ -302,7 +302,7 @@ def infercnv(
         result = run_phase2(
             result, adata, config=cfg,
             reference_key=reference_key, reference_cat=reference_cat,
-            random_state=0, profile=profile,
+            random_state=cfg.random_state, profile=profile,
         )
 
     # Drop the transient companion fields once Phase 2 has consumed them.

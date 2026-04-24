@@ -21,7 +21,7 @@ This module mirrors four R files in ``infercnv/infercnv-master/R``:
 Algorithm overview
 ------------------
 R's i6 HMM needs, per CNV state ``s in {0.01, 0.5, 1, 1.5, 2, 3}``:
-    * a mean ``mu_s`` in log2-FC space
+    * a mean ``mu_s`` in linear-FC space
     * a per-``num_cells`` sd function ``sigma_s(n)``
 
 so that :class:`pyinfercnv.hmm.i6.predict_i6` can be called on rowMeans
@@ -42,7 +42,7 @@ R obtains ``mu_s`` and ``sigma_s(n)`` by:
         and ``'splatter'`` require 500+ lines of additional R; deferred).
     3.  Running the full Phase 1 inferCNV pipeline (filter → normalize →
         log2 → subtract_ref → clip → smooth → center → subtract_ref₂ →
-        invert? **no — stays in log2-FC**) on the hspike counts. The
+        ``invert_log2`` and outlier pruning) on the hspike counts. The
         result ``hspike_matrix`` has one row per simulated cell and one
         column per fake gene, so each hspike chromosome's contiguous gene
         columns carry the known CNV label of that block.
@@ -70,7 +70,7 @@ Matrix layout
   not sparse — hspike is always small (~2 * n_groups * num_cells_per_state
   cells × 11 * num_genes_per_chr genes ≈ 200 × 4400 for defaults).
 * Internal Phase 1 replay on hspike produces a dense float32
-  ``(n_hspike_cells, n_hspike_genes)`` in log2-FC space.
+  ``(n_hspike_cells, n_hspike_genes)`` in linear-FC space.
 
 Tier classification
 -------------------
@@ -107,12 +107,12 @@ NumPy vectorization + SciPy primitives (``scipy.interpolate``,
 ``scipy.special``) only; no ``@njit`` is added here or in
 :mod:`pyinfercnv.pipeline_phase2`. (G2 Q4 documentation.)
 
-Skeleton status
----------------
-This file is a G2-pending API skeleton. Every function body raises
-``NotImplementedError("skeleton — G2 pending")``. Implementation lands in
-Wave 2 after codex G2 adjudication on API + data layout + psutil hook
-placement.
+Current parity notes
+--------------------
+The implementation intentionally keeps the stochastic hspike calibration
+deterministic. Its default ``random_state=42`` mirrors the local R reference
+fixture's ``set.seed(42)``. Python's PCG64 and R's Mersenne-Twister streams are
+not bit-identical, so hspike remains empirical rather than bit-exact.
 """
 from __future__ import annotations
 
@@ -163,6 +163,24 @@ HSPIKE_DEFAULT_NUM_GENES_PER_CHR: int = 400
 #: R ``get_hspike_cnv_mean_sd_trend_by_num_cells_fit`` defaults.
 HSPIKE_TREND_NUM_ROUNDS: int = 100
 HSPIKE_TREND_MAX_NUM_CELLS: int = 100
+
+
+def _collapse_duplicate_x_by_mean(
+    x_sorted: NDArray[np.float64],
+    y_sorted: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Collapse exact duplicate x values by averaging y.
+
+    R ``smooth.spline`` handles repeated ``x`` values internally rather than
+    keeping an arbitrary first row. The mean aggregation is the least-surprising
+    equal-weight reduction and keeps the downstream SciPy fit well-conditioned.
+    Inputs must already be sorted by ``x``.
+    """
+    unique_x, first_idx, counts = np.unique(
+        x_sorted, return_index=True, return_counts=True
+    )
+    y_sum = np.add.reduceat(y_sorted, first_idx)
+    return unique_x.astype(np.float64), (y_sum / counts).astype(np.float64)
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +309,7 @@ def calibrate_i6_emission(
     trend_max_num_cells: int = HSPIKE_TREND_MAX_NUM_CELLS,
     include_dropout: bool = True,
     keep_matrix: bool = False,
-    random_state: int | None = 0,
+    random_state: int | None = 42,
     profile: dict[str, Any] | None = None,
 ) -> HspikeCalibration:
     """Top-level R-parity entry for i6 emission calibration.
@@ -739,16 +757,20 @@ def _fit_dropout_logistic_params(
         m = np.concatenate(m_list)
         p0 = np.concatenate(p0_list)
 
-    # Fit spline: smooth p0 ~ log(m+1)
-    log_m = np.log(m + 1.0)
+    # R `.get_logistic_params` filters zero means, then fits
+    # `smooth.spline(log(m), p0)` (inferCNV_simple_sim.R:188-219). This is
+    # intentionally different from the mean-var spline, which uses log(m+1).
+    positive = m > 0.0
+    if not np.any(positive):
+        return np.array([0.0, 1.0]), np.array([0.0, 0.0])
+
+    log_m = np.log(m[positive])
+    p0 = p0[positive]
     order = np.argsort(log_m)
     log_m_sorted = log_m[order]
     p0_sorted = np.clip(p0[order], 0.0, 1.0)
 
-    # Remove duplicates for spline fitting
-    _, unique_idx = np.unique(log_m_sorted, return_index=True)
-    x_u = log_m_sorted[unique_idx]
-    y_u = p0_sorted[unique_idx]
+    x_u, y_u = _collapse_duplicate_x_by_mean(log_m_sorted, p0_sorted)
 
     if x_u.shape[0] < 4:
         # Not enough data: constant 0 dropout
@@ -812,10 +834,7 @@ def _fit_meanvar_spline(
     log_m_sorted = log_m[order]
     log_v_sorted = log_v[order]
 
-    # Remove duplicates
-    _, unique_idx = np.unique(log_m_sorted, return_index=True)
-    x_u = log_m_sorted[unique_idx]
-    y_u = log_v_sorted[unique_idx]
+    x_u, y_u = _collapse_duplicate_x_by_mean(log_m_sorted, log_v_sorted)
 
     if x_u.shape[0] < 4:
         # Degenerate: return trivial flat spline

@@ -127,11 +127,11 @@ signal agreement is unchanged.
 
 | R step | Python module | Measurement |
 |---|---|---|
-| `predict_CNV_via_HMM_wrapper` (i3) | `hmm.predict_i3` + `pipeline_phase2.run_phase2` | Jaccard 0.976 vs R step17 on oligo |
-| `predict_CNV_via_HMM_wrapper` (i6 + hspike) | `hmm.predict_i6` + `hmm.hspike.calibrate_i6_emission` | Jaccard 0.968 vs R step17 on oligo |
+| `predict_CNV_via_HMM_wrapper` (i3) | `hmm.predict_i3` + `pipeline_phase2.run_phase2` | Jaccard 1.000 vs R step17 on oligo |
+| `predict_CNV_via_HMM_wrapper` (i6 + hspike) | `hmm.predict_i6` + `hmm.hspike.calibrate_i6_emission` | Jaccard 0.979 vs R step17 on oligo |
 | Viterbi.dthmm.adj kernel (R-aligned input) | `kernels.hmm_viterbi_numba` | Jaccard 0.9999 with R's own step15+step16 feeding py kernel |
 
-CI floors are `0.90 / 0.90` on Jaccard — deliberately below observed
+CI floors are `0.96 / 0.99` on i6/i3 Jaccard — deliberately below observed
 values so real regressions can be distinguished from stochastic drift.
 
 ### Metrics deliberately dropped

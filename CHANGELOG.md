@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (post-v0.2.0.dev1)
+## 0.2.0.dev2 (2026-04-24)
 
 ### Phase 1 bit-exact — all intermediates float64
 
@@ -97,6 +97,12 @@ and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 - `InferCNVConfig.validate()` now errors on `analysis_mode != "subclusters"`;
   `"samples"` and `"cells"` are Phase 3 work and were previously silently
   accepted.
+- `InferCNVConfig.random_state` now defaults to `42` and is threaded through
+  Phase 2 hspike/HMM execution to match the local R reference workflow's
+  `set.seed(42)`.
+- `hmm.hspike` now mirrors R dropout fitting more closely by using
+  `smooth.spline(log(m), p0)` semantics on positive means and collapsing
+  duplicate spline `x` values by mean instead of keeping an arbitrary row.
 - README Parity-status (Phase 2) rewritten to cite the three-patient
   Track A distribution data instead of a single DCIS1 run.
 - `pipeline_phase2.py` docstring: removed stale "future field in Phase 2"
@@ -105,9 +111,8 @@ and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 
 ### Notes
 
-- No `twine upload` authorization granted yet. Tags `v0.2.0.dev0` and
-  `v0.2.0.dev1` remain immutable. Tag `v0.2.0.dev2` is **not** created
-  automatically; Jason bumps when ready.
+- Local release prep bumps `pyproject.toml` and `pyinfercnv.__version__`
+  to `0.2.0.dev2`. Tags `v0.2.0.dev0` and `v0.2.0.dev1` remain immutable.
 - Pure-Python wheel invariant preserved: `python -m build` emits
   `py3-none-any.whl` with zero `.so`/`.pyd`/`.dylib`. Twine check passes
   on both wheel and sdist.
@@ -160,9 +165,9 @@ and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 
 ### Parity
 - **tier-3.5 empirical on smart-seq2 oligodendroglioma fixture**:
-  step 15 subcluster ARI = 1.000; step 17 HMM i6 Jaccard = 0.968;
-  step 17 HMM i3 Jaccard = 0.976 (`tests/test_r_parity.py`, floors
-  0.85 / 0.90 / 0.90).
+  step 15 subcluster ARI = 1.000; step 17 HMM i6 Jaccard = 0.979;
+  step 17 HMM i3 Jaccard = 1.000 (`tests/test_r_parity.py`, floors
+  0.85 / 0.96 / 0.99).
 - **kernel-isolated parity**: 0.9999 on R-aligned input to
   `pyinfercnv.kernels.hmm_viterbi_numba` (bit-exact-class; not a
   cross-pipeline claim).

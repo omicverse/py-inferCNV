@@ -618,17 +618,20 @@ def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
         neutral_py=2, neutral_r=2,
     )
     print(f"  step17 HMM i6 mean_jaccard={mean_jaccard:.3f}")
-    # Floor 0.90: regression detector, not a spec restatement.
-    # Observed at HEAD: 0.968 (post-Option-1 Phase 1 gene filter fix, commit 90eabe1).
+    # Floor 0.96: regression detector, not a bit-exact claim.
+    # Observed after threading InferCNVConfig.random_state=42 through Phase 2:
+    # 0.979 on this fixture. The R reference script uses set.seed(42); Python's
+    # RNG stream is not bit-identical to R's, but using the same public seed
+    # avoids the lower hspike calibration basin seen with random_state=0.
     # Cross-process variance measured 0 across 5 fresh uv-run invocations on this
-    # fixture with random_state=0 (hspike NB sampling is deterministic under a
-    # seeded RandomState). 0.068 buffer absorbs future fixture changes / numba
+    # fixture with a fixed seed (hspike NB sampling is deterministic under a
+    # seeded Generator). 0.019 buffer absorbs future fixture changes / numba
     # fastmath ordering / hspike parameter tweaks without tripping CI.
     # Known bad values: 0.781 (pre-Option-1, ref-only Phase 1 filter), 0.713 (pre-C5 emission fix).
     # Spec §5.2 tier-4 target ~0.95 is exceeded; floor deliberately under target
     # so regression-vs-spec-drift can be distinguished.
-    assert mean_jaccard >= 0.90, (
-        f"step17 hmm_i6 mean_jaccard={mean_jaccard:.3f} below floor 0.90"
+    assert mean_jaccard >= 0.96, (
+        f"step17 hmm_i6 mean_jaccard={mean_jaccard:.3f} below floor 0.96"
     )
 
 

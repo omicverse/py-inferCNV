@@ -157,7 +157,7 @@ def run_phase2(
     config: "InferCNVConfig",
     reference_key: str | None = None,
     reference_cat: str | Sequence[str] | None = None,
-    random_state: int = 0,
+    random_state: int = 42,
     profile: dict[str, Any] | None = None,
 ) -> "InferCNVResult":
     """Orchestrate R steps 15 (subcluster), hspike (i6 calibration), 17 (HMM).
