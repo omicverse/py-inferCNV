@@ -46,13 +46,20 @@ arbitrary algorithm-internal labels with no py-vs-R semantic contract
 | `Viterbi.dthmm.adj` kernel (R `inferCNV_HMM.R:1101-1175`) | `kernels.hmm_viterbi_numba._rstyle_log_emit` + `_viterbi_dp_numba` | 2 | kernel-isolated parity | ✓ | Jaccard 0.9999 on R-aligned input (R step15 + step16 → py kernel) per `scripts/triage_i3/triage_real_data.py` |
 | `pipeline_phase2.run_phase2` top-level orchestration | `pipeline_phase2.run_phase2` | 2 | — | ✓ | invoked from `pipeline.infercnv()` when `config.HMM=True` |
 
-## Phase 3 (R steps 18-19, 21-22) — **Not implemented**
+## Phase 3 (R steps 18-19, 21-22) — **Skeleton in progress**
+
+Status: pipeline_phase3 orchestrator + three module stubs landed 2026-04-24
+(raise NotImplementedError when their toggles fire; no-op otherwise).
+Implementation split across Agents B1 / B2 / B3; see
+`docs/superpowers/plans/2026-04-24-phase3-start.md`.
 
 | R source | Python submodule | Tier target | Status |
 |---|---|---|---|
-| `inferCNV_BayesNet` (Gibbs) | `bayesnet/gibbs` | 3.5 |ΔP|<0.05 | TODO |
-| `inferCNV_mask_non_DE` | `mask_de/wilcoxon` | 4 bit-exact | TODO |
-| `noise_reduction` | `denoise/ref_mean_sd` | 4 bit-exact | TODO |
+| `inferCNV_BayesNet` (Gibbs, rjags BUGS_Mixture_Model) | `bayesnet/gibbs` | 3.5 \|ΔP\|<0.05 | Skeleton (Agent B1) |
+| `inferCNV_mask_non_DE` (Wilcoxon/BH per subcluster vs ref) | `mask_de/wilcoxon` | 4 bit-exact (target) | Skeleton (Agent B2) |
+| `clear_noise_via_ref_mean_sd` (`inferCNV_ops.R:2302-2346`) | `denoise/ref_mean_sd` | 4 bit-exact | Skeleton (Agent B3) |
+| `filterHighPNormals` (R step 19) | co-located in `bayesnet/` | — | Part of Agent B1 |
+| `pipeline_phase3.run_phase3` top-level orchestration | `pipeline_phase3.run_phase3` | — | Skeleton; no-op when all toggles off, raises otherwise |
 
 ## Phase 3b — **Not implemented**
 

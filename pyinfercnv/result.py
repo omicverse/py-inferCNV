@@ -108,6 +108,23 @@ class InferCNVResult:
     cnv_regions: pd.DataFrame | None = None
     posterior_p_normal: pd.DataFrame | None = None
 
+    # Phase 3 fields (all None until :func:`pyinfercnv.pipeline_phase3.run_phase3`
+    # populates them — see ``docs/superpowers/plans/2026-04-24-phase3-start.md``).
+    # ``bayes_posterior``: BayesNet per-region per-state posterior probabilities.
+    #   Shape ``(K, n_regions)`` where K=6 (i6) or 3 (i3). float64.
+    #   R source: ``inferCNV_BayesNet.R::cnv_prob`` (L1137-1141).
+    # ``de_mask``: Phase 3 mask_non_DE gene mask. Bool, shape
+    #   ``(n_cells, n_bins)`` — True = kept (DE), False = masked to
+    #   ``center_val``. R source: ``inferCNV_mask_non_DE.R:82-118``.
+    # ``denoised_matrix``: post-denoise CNV matrix. float32, shape
+    #   ``(n_cells, n_bins)``. Values inside the ref-mean ± sd band are
+    #   flattened to the ref mean. R source:
+    #   ``inferCNV_ops.R:2302-2346``. Kept separate from
+    #   ``cnv_matrix_fc`` so the pre/post comparison is non-destructive.
+    bayes_posterior: np.ndarray | None = None
+    de_mask: np.ndarray | None = None
+    denoised_matrix: np.ndarray | None = None
+
     profile: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:

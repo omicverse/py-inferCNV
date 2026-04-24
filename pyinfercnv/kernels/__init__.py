@@ -1,4 +1,8 @@
 """Numba hot kernels — only for loop-bound code that scipy cannot express."""
+from pyinfercnv.kernels.bayesnet_gibbs_numba import (
+    gibbs_sample_regions,
+    pack_regions,
+)
 from pyinfercnv.kernels.hmm_viterbi_numba import (
     compute_log_emit,
     forward_backward_numpy,
@@ -16,4 +20,6 @@ __all__ = [
     "viterbi_decode_numpy",
     "forward_backward_numpy",
     "compute_log_emit",
+    "gibbs_sample_regions",
+    "pack_regions",
 ]

@@ -52,8 +52,37 @@ class InferCNVConfig:  # noqa: N801
     HMM_type: HMMType = "i6"  # noqa: N815
     HMM_transition_prob: float = 1e-6  # noqa: N815
     HMM_i3_pval: float = 0.05  # noqa: N815
+    # Phase 3 step 18/19 — BayesNet posterior threshold (R
+    # `inferCNV_ops.R:275`; guard at L1364 is ``BayesMaxPNormal > 0``).
+    # Default 0.5 mirrors R; set to 0 to short-circuit Phase 3 BayesNet.
     BayesMaxPNormal: float = 0.5  # noqa: N815
+    # R `inferCNV_ops.R:271` — per-cell / per-consensus / per-subcluster
+    # CNV report layout. Only the choice of aggregator for downstream
+    # BED-style output; does NOT change HMM prediction. Default matches R.
+    HMM_report_by: Literal["subcluster", "consensus", "cell"] = "subcluster"  # noqa: N815
+    # R `inferCNV_ops.R:281` — reassign CNVs flagged as high-P(normal) in
+    # BayesNet step 19 (vs just dropping them).
+    reassignCNVs: bool = True  # noqa: N815
+    # R `inferCNV_ops.R:323`. BayesNet diagnostic plots / traces. Off
+    # mirrors R default; ignored by the Python port beyond being passed
+    # through for signature parity.
+    diagnostics: bool = False
     analysis_mode: AnalysisMode = "subclusters"
+
+    # --- Phase 3 step 21 — mask non-DE genes between tumour/ref ---
+    # R source: `inferCNV_mask_non_DE.R`; wired at
+    # `inferCNV_ops.R:1510-1552`. Toggle default False matches R.
+    mask_nonDE_genes: bool = False  # noqa: N815
+    # R `inferCNV_ops.R:330`. BH-adjusted p-value threshold.
+    mask_nonDE_pval: float = 0.05  # noqa: N815
+    # R `inferCNV_ops.R:331`. `test.use` → `test_use` (dot→underscore).
+    # R supports "wilcoxon", "t", "perm"; pyinfercnv skeleton targets
+    # "wilcoxon" first and leaves "t" as a stretch. "perm" (coin package)
+    # is out of scope.
+    test_use: Literal["wilcoxon", "t"] = "wilcoxon"
+    # R `inferCNV_ops.R:332`. "any" / "most" / "all" — how many normal
+    # types a gene must be DE against before it's retained.
+    require_DE_all_normals: Literal["any", "most", "all"] = "any"  # noqa: N815
 
     # --- Phase 2 subcluster partition ---
     tumor_subcluster_partition_method: str = "leiden"  # noqa: N815
@@ -76,9 +105,18 @@ class InferCNVConfig:  # noqa: N801
 
     # --- misc ---
     lfc_clip: float = 3.0
+    # Phase 3 step 22 — denoise toggle + knobs (R `inferCNV_ops.R:301-304`).
+    # ``denoise`` guards the ref-mean-sd flattener
+    # (``clear_noise_via_ref_mean_sd`` at ``inferCNV_ops.R:2302-2346``).
+    # Default False matches R. ``noise_filter`` overrides the sd-based
+    # bandwidth with an explicit absolute threshold
+    # (``clear_noise`` at ``inferCNV_ops.R:2232-2268``) when not None.
     denoise: bool = False
     noise_filter: float | None = None
     sd_amplifier: float = 1.5
+    # R `inferCNV_ops.R:304`. Sigmoidal soft mask variant of the ref-mean
+    # denoise path (``depress_log_signal_midpt_val`` wrapper, L2329).
+    noise_logistic: bool = False
     debug: bool = False
     num_threads: int = 4
     # R-parity fixture scripts call set.seed(42). Python and R RNG streams are
