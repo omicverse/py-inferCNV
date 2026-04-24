@@ -54,8 +54,14 @@ class InferCNVConfig:  # noqa: N801
     HMM_i3_pval: float = 0.05  # noqa: N815
     # Phase 3 step 18/19 — BayesNet posterior threshold (R
     # `inferCNV_ops.R:275`; guard at L1364 is ``BayesMaxPNormal > 0``).
-    # Default 0.5 mirrors R; set to 0 to short-circuit Phase 3 BayesNet.
-    BayesMaxPNormal: float = 0.5  # noqa: N815
+    # **Py default diverges from R**: R ships 0.5 (Bayes on). Py ships
+    # **0.0** (Bayes off) until the `pipeline_phase3.run_phase3` BayesNet
+    # branch is wired (currently raises NotImplementedError because
+    # hspike_calibration is not persisted on InferCNVResult; see
+    # pipeline_phase3.py docstring). Set to 0.5 explicitly to opt into
+    # the independently-tested `pyinfercnv.bayesnet` direct API. This
+    # footgun-avoidance will be reverted when orchestrator wires BayesNet.
+    BayesMaxPNormal: float = 0.0  # noqa: N815
     # R `inferCNV_ops.R:271` — per-cell / per-consensus / per-subcluster
     # CNV report layout. Only the choice of aggregator for downstream
     # BED-style output; does NOT change HMM prediction. Default matches R.
