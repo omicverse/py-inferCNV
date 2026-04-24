@@ -342,7 +342,8 @@ def test_step10_smooth_pyramidinal_per_chromosome(gene_order):  # noqa: F811
     # We need to smooth per chromosome — group genes by chr per gene_order.
     chrom_of = dict(zip(gene_order["gene_symbol"], gene_order["chromosome"]))
 
-    py_in_cells_x_genes = r_step09.T.astype(np.float32)
+    # Float64 throughout for bit-exact parity with R's stats::filter.
+    py_in_cells_x_genes = r_step09.T.astype(np.float64)
     py_out = py_in_cells_x_genes.copy()
 
     chroms_in_order = []
@@ -371,8 +372,9 @@ def test_step10_smooth_pyramidinal_per_chromosome(gene_order):  # noqa: F811
             py_out[:, start:end] = smoothed
 
     diff_full = max_abs_diff(py_out.T.astype(np.float64), r_step10)
-    # Tier-4 approx for tail; tier-4 bit-exact in interior. Combined floor:
-    assert diff_full < 1e-3, f"smooth_pyramidinal step10 max_diff={diff_full:.3e}"
+    # Bit-exact: single centered direct convolution with pre-divided
+    # triangular kernel (interior) + R-exact dynamic-denominator tail.
+    assert diff_full < 1e-10, f"smooth_pyramidinal step10 max_diff={diff_full:.3e}"
 
 
 # ============================================================================
