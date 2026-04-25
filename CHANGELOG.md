@@ -1,5 +1,102 @@
 # Changelog
 
+## 0.2.0 (2026-04-25) — first stable release
+
+First stable cut. Phase 1 + Phase 2 + Phase 3 are all implemented and
+R-parity-validated. The R-parity audit covers the R inferCNV package's
+own bundled test fixture (oligodendroglioma smart-seq2 downsampled) plus
+three 3CA kilocell 10x UMI patients (DCIS1, TNBC1, TNBC3). Bit-exactness
+is established at the step level where R writes intermediate fixtures;
+end-to-end parity is measured by Spearman ρ on the continuous post-Phase-1
+CNV matrix (the quantity every downstream step consumes).
+
+### Phase 1 (R steps 2-14, 16) — bit-exact
+
+| Step | Module | max_diff | Status |
+|---|---|---|---|
+| step02 filter_genes | `preprocess.filter_genes` | exact | ✓ |
+| step03 normalize_by_seq_depth | `preprocess.normalize` | < 1e-10 | bit-exact |
+| step04 log2(x+1) | `preprocess.log_transform` | < 1e-10 | bit-exact |
+| step08 subtract_ref_mean | `preprocess.subtract_ref` | < 1e-10 | bit-exact |
+| step09 max_threshold | `preprocess.max_threshold` | < 1e-10 | bit-exact |
+| step10 smooth_pyramidinal | `kernels.smooth_tail` | < 1e-10 | bit-exact (post 9f213cf) |
+| step11 center_cells | `preprocess.center_cells` | < 1e-10 | bit-exact |
+| step14 invert_log2 | `preprocess.invert_log2` | < 1e-10 | bit-exact |
+| step16 prune_outliers | `preprocess.prune_outliers` | < 1e-10 | bit-exact |
+
+All Phase 1 intermediates compute in float64; the public output contract
+(`result.cnv_matrix`, `result.cnv_matrix_fc`) downcasts to float32 only
+at result assembly in `pipeline.py`. The Phase 1 → Phase 2 handoff
+preserves float64 precision via the `cnv_matrix_f64` companion field.
+
+### Phase 2 (R steps 15, 17) — R-parity-validated
+
+| Module | R source | Tier | Status |
+|---|---|---|---|
+| Leiden subclusters | `inferCNV_tumor_subclusters.R` | operational floor 0.85 | ARI **1.000** on oligo (ARI retired as parity metric — Leiden labels are arbitrary; cluster identity not a parity contract) |
+| HMM Viterbi (i6 + i3) | `inferCNV_HMM.R::Viterbi.dthmm.adj` | bit-exact kernel | numba `@njit` port; 0.9999 Jaccard on R-aligned input |
+| hspike i6 calibration | `inferCNV_hidden_spike.R::.build_and_add_hspike` | structural rules D.1-D.7 | strict R-parity rewrite (commit `384e983`) |
+| step17 HMM i3 Jaccard | — | — | **1.000** (bit-exact post linear-FC switch, commit `8ed9318`) |
+| step17 HMM i6 Jaccard | — | — | **0.979** on oligo (HEAD measurement) |
+| Spearman ρ (CNV matrix) | — | primary parity metric | **1.0000** on DCIS1/TNBC1/TNBC3 10x UMI; **0.9998** on oligo smart-seq2 |
+
+### Phase 3 (R steps 18-22) — wired into top-level `infercnv()`
+
+| Module | R source | Tier | Status |
+|---|---|---|---|
+| BayesNet Gibbs (step 18) | `inferCNV_BayesNet.R` (rjags BUGS Mixture Model) | soft-tier (\|ΔP\|<0.10) ≥90% | ✓ implemented; `removeCNV`-only port. `reassignCNVs=True` (R default) raises `NotImplementedError` at orchestrator. |
+| filterHighPNormals (step 19) | `inferCNV_BayesNet.R::filterHighPNormals` | post-filter Jaccard ≥0.94 | ✓ implemented (Jaccard 0.979 on oligo) |
+| state→CN-ratio proxy (step 20) | `inferCNV_HMM.R:1195-1200` (i6) + `inferCNV_i3HMM.R:409-411` (i3) | bit-exact | ✓ both i6 and i3 `max_diff = 0.000e+00` |
+| mask_non_DE (step 21) | `inferCNV_mask_non_DE.R` | bit-exact | ✓ matrix `max_diff = 1.110e-16`; mask boolean xor_frac < 1e-4 (residual-inference soft floor — see commit `f468e2d`) |
+| denoise (step 22) | `inferCNV_ops.R:2302-2346` (`clear_noise_via_ref_mean_sd`) | bit-exact | ✓ implemented; `noise_logistic=True` (R sigmoidal mask) raises `NotImplementedError` |
+| Top-level `pipeline.infercnv()` ⇒ Phase 3 | — | — | ✓ `cfg.HMM=True` or any of `BayesMaxPNormal>0`/`mask_nonDE_genes`/`denoise` triggers `run_phase3`; permanent regression test in `tests/integration/test_top_level_phase3.py` |
+
+### Result schema additions
+
+`InferCNVResult` gained Phase 3 fields (all default `None`):
+
+- `bayes_posterior` — `(n_regions, K)` float64; `K=6` (i6) or `3` (i3). Persisted from `gibbs_result["cnv_posterior"]`.
+- `de_mask` — `(n_cells, n_bins)` bool; True = kept (DE), False = masked to `center_val`.
+- `denoised_matrix` — `(n_cells, n_bins)` float32; values inside the ref-mean ± sd band flattened to ref mean. Kept separate from `cnv_matrix_fc` for non-destructive pre/post comparison.
+- `hmm_proxy_matrix` — `(n_cells, n_bins)` float64; post-step20 state→CN-ratio remap. Equivalent to R's `hmm.infercnv_obj@expr.data` after step 20.
+
+`InferCNVConfig` gained 9 Phase 3 toggle fields with R-aligned defaults
+(`reassignCNVs=True`, `mask_nonDE_genes=False`, `denoise=False`, etc.);
+unsupported R-default branches raise `NotImplementedError` with explicit
+"set X=False to use the supported branch" messages — no silent
+divergence.
+
+### Tests
+
+- pytest: **220 passed** (excluding `tests/test_regression.py`)
+  - +5 vs 0.2.0.dev2 baseline 215: orchestrator unit (P0.2), step20 i3 parity (P2.2), 3 top-level integration tests (P1.1)
+- Wheel: `pyinfercnv-0.2.0-py3-none-any.whl`; `twine check` PASSED. Pure-Python (no `.so`/`.pyd`/`.dylib`); numba `@njit(cache=True)` for hot kernels only.
+- R-parity gate: `tests/test_r_parity.py` 19/19 passed.
+
+### Known limitations / 0.3 backlog
+
+R's non-default branches that the Python port fail-loud-blocks at the
+orchestrator boundary (set the listed flag to use the supported branch):
+
+- `BayesNet reassignCNVs=True` (R default; Py uses `removeCNV`-only port at `bayesnet/gibbs.py`)
+- `denoise noise_logistic=True` (R sigmoidal mask at `inferCNV_heatmap.R:2783`)
+- `BayesNet postMcmcMethod='removeCells'` (R variant at `bayesnet/gibbs.py:181-185`)
+- `hspike sim_method='simple'` / `'splatter'` (R alt simulation paths at `hmm/hspike.py:411`)
+- `preprocess threshold='auto'` (R threshold-auto branch at `preprocess/max_threshold.py`)
+- `denoise apply_median_filtering` (R alt denoise path)
+- Phase 3b variational approximation of Gibbs (`bayesnet/vb` — performance optimization; full-quality Gibbs is the primary path)
+- i6 hspike μ/σ baseline drift (Jaccard 0.918 → 0.979 between commit `384e983` and HEAD; root cause not isolated, no regression — see `CODEX_HANDOFF.md §0.1-B`)
+
+### Codex collaboration
+
+The Phase 3 wire-fix that landed in this release was developed with two
+rounds of plan-stage Codex meta-review (gpt-5.5, xhigh) plus two rounds
+of post-implementation review. See
+`docs/superpowers/findings/2026-04-25-phase3-wire-fix-summary.md` and
+the reviews under `docs/superpowers/reviews/`.
+
+---
+
 ## 0.2.0.dev2 (2026-04-24)
 
 ### Phase 1 bit-exact — all intermediates float64
