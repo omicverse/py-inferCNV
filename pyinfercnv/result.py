@@ -15,6 +15,8 @@ import pandas as pd
 if TYPE_CHECKING:
     from anndata import AnnData
 
+    from pyinfercnv.hmm.hspike import HspikeCalibration
+
 
 @dataclass
 class InferCNVResult:
@@ -111,7 +113,9 @@ class InferCNVResult:
     # Phase 3 fields (all None until :func:`pyinfercnv.pipeline_phase3.run_phase3`
     # populates them — see ``docs/superpowers/plans/2026-04-24-phase3-start.md``).
     # ``bayes_posterior``: BayesNet per-region per-state posterior probabilities.
-    #   Shape ``(K, n_regions)`` where K=6 (i6) or 3 (i3). float64.
+    #   Shape ``(n_regions, K)`` where K=6 (i6) or 3 (i3); float64. Matches the
+    #   ``cnv_posterior`` key returned by
+    #   :func:`pyinfercnv.bayesnet.gibbs.run_bayesnet_gibbs` (gibbs.py:269-276).
     #   R source: ``inferCNV_BayesNet.R::cnv_prob`` (L1137-1141).
     # ``de_mask``: Phase 3 mask_non_DE gene mask. Bool, shape
     #   ``(n_cells, n_bins)`` — True = kept (DE), False = masked to
@@ -124,6 +128,30 @@ class InferCNVResult:
     bayes_posterior: np.ndarray | None = None
     de_mask: np.ndarray | None = None
     denoised_matrix: np.ndarray | None = None
+    # ``hmm_proxy_matrix``: post-step20 state→CN-ratio proxy matrix.
+    # Shape ``(n_cells, n_bins)`` float64. Populated by
+    # :func:`pyinfercnv.pipeline_phase3.run_phase3` when BayesNet fires
+    # (consumes the post-filter HMM state matrix) or otherwise when
+    # Phase 3 orchestrator runs with HMM states available. Equivalent to
+    # R's ``hmm.infercnv_obj@expr.data`` after step 20 (R:
+    # ``inferCNV_ops.R:1463-1499``).
+    hmm_proxy_matrix: np.ndarray | None = None
+
+    # Phase 2 -> Phase 3 BayesNet emission handoff (persisted by
+    # :func:`pyinfercnv.pipeline_phase2.run_phase2`, consumed by
+    # :func:`pyinfercnv.bayesnet._step18_bayesnet` when
+    # :func:`pyinfercnv.pipeline_phase3.run_phase3` auto-sources them).
+    # ``hspike_calibration``: the frozen :class:`HspikeCalibration` returned
+    #   by :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission` (i6 path
+    #   only). ``None`` when ``config.HMM_type == "i3"`` or HMM disabled.
+    # ``i3_state_mus`` / ``i3_state_sigmas``: shape (3,) float64 tuples
+    #   produced by :func:`pyinfercnv.hmm.i3.estimate_i3_state_params`
+    #   (i3 path only). ``None`` when ``config.HMM_type == "i6"`` or HMM
+    #   disabled. Forward-ref on ``HspikeCalibration`` avoids a circular
+    #   import with :mod:`pyinfercnv.hmm.hspike`.
+    hspike_calibration: "HspikeCalibration | None" = None
+    i3_state_mus: np.ndarray | None = None
+    i3_state_sigmas: np.ndarray | None = None
 
     profile: dict[str, Any] | None = None
 

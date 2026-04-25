@@ -596,4 +596,67 @@ tryCatch({
     cat(sprintf("[r_reference] Phase 3 denoise dump skipped: %s\n", conditionMessage(e)))
 })
 
-cat("[r_reference] ALL DONE — Phase 1 + Phase 2 complete; Phase 3 dump skeleton in place\n")
+# --- Agent C segment: step20 dump ---
+# Runs infercnv::run() up to step 20 (state-to-proxy-expr remap) with:
+#   HMM=TRUE, HMM_type="i6", BayesMaxPNormal=0 (Bayes off → no filter step),
+#   mask_nonDE_genes=FALSE, denoise=FALSE.
+# After step 20, the `hmm.infercnv_obj` inside R holds the remapped
+# expr.data in its RDS on disk.  We load the step-20 RDS directly so we
+# don't need a patched infercnv source; the file is named by the pattern
+# established in inferCNV_ops.R::get_reload_rds_names.
+#
+# Produces:
+#   tests/r_out/step20_proxy_i6.tsv  — genes × cells float64, same shape as step17
+#   tests/r_out/step20_proxy_i3.tsv  — same for i3 variant
+tryCatch({
+    tmp_c_i6 <- file.path(tempdir(), "infercnv_ref_phase3_step20_i6")
+    dir.create(tmp_c_i6, showWarnings = FALSE, recursive = TRUE)
+    step20_obj_i6 <- phase3_run("i6", tmp_c_i6,
+                                do_bayes = FALSE, do_mask = FALSE, do_denoise = FALSE,
+                                BayesMaxPNormal = 0,
+                                up_to_step = 20)
+    # After up_to_step=20, R returns the main infercnv_obj; the hmm.infercnv_obj
+    # post-step-20 is saved as an RDS in tmp_c_i6. Load the RDS with the pattern
+    # "20_HMMi6.leiden.NF_NA.SD_1.5.NL_FALSE.infercnv_obj" (see reload_info in R).
+    rds_candidates <- list.files(tmp_c_i6, pattern = "^20_HMM.*\\.infercnv_obj$", full.names = TRUE)
+    if (length(rds_candidates) == 0) {
+        stop("No step-20 RDS found in ", tmp_c_i6, "; check infercnv::run() save_rds=TRUE output")
+    }
+    hmm20_i6 <- readRDS(rds_candidates[[1]])
+    step20_i6_path <- file.path(output_dir, "step20_proxy_i6.tsv")
+    write.table(hmm20_i6@expr.data, file = step20_i6_path,
+                sep = "\t", quote = FALSE,
+                col.names = NA, row.names = TRUE)
+    cat(sprintf("[r_reference] wrote %s (%d genes x %d cells)\n",
+                step20_i6_path,
+                nrow(hmm20_i6@expr.data),
+                ncol(hmm20_i6@expr.data)))
+}, error = function(e) {
+    cat(sprintf("[r_reference] Agent C step20 i6 dump skipped: %s\n", conditionMessage(e)))
+})
+
+tryCatch({
+    tmp_c_i3 <- file.path(tempdir(), "infercnv_ref_phase3_step20_i3")
+    dir.create(tmp_c_i3, showWarnings = FALSE, recursive = TRUE)
+    step20_obj_i3 <- phase3_run("i3", tmp_c_i3,
+                                do_bayes = FALSE, do_mask = FALSE, do_denoise = FALSE,
+                                BayesMaxPNormal = 0,
+                                up_to_step = 20)
+    rds_candidates_i3 <- list.files(tmp_c_i3, pattern = "^20_HMM.*\\.infercnv_obj$", full.names = TRUE)
+    if (length(rds_candidates_i3) == 0) {
+        stop("No step-20 RDS found in ", tmp_c_i3, "; check infercnv::run() save_rds=TRUE output")
+    }
+    hmm20_i3 <- readRDS(rds_candidates_i3[[1]])
+    step20_i3_path <- file.path(output_dir, "step20_proxy_i3.tsv")
+    write.table(hmm20_i3@expr.data, file = step20_i3_path,
+                sep = "\t", quote = FALSE,
+                col.names = NA, row.names = TRUE)
+    cat(sprintf("[r_reference] wrote %s (%d genes x %d cells)\n",
+                step20_i3_path,
+                nrow(hmm20_i3@expr.data),
+                ncol(hmm20_i3@expr.data)))
+}, error = function(e) {
+    cat(sprintf("[r_reference] Agent C step20 i3 dump skipped: %s\n", conditionMessage(e)))
+})
+
+cat("[r_reference] ALL DONE — Phase 1 + Phase 2 + Phase 3 dumps complete\n")

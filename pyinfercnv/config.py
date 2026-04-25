@@ -55,12 +55,11 @@ class InferCNVConfig:  # noqa: N801
     # Phase 3 step 18/19 — BayesNet posterior threshold (R
     # `inferCNV_ops.R:275`; guard at L1364 is ``BayesMaxPNormal > 0``).
     # **Py default diverges from R**: R ships 0.5 (Bayes on). Py ships
-    # **0.0** (Bayes off) until the `pipeline_phase3.run_phase3` BayesNet
-    # branch is wired (currently raises NotImplementedError because
-    # hspike_calibration is not persisted on InferCNVResult; see
-    # pipeline_phase3.py docstring). Set to 0.5 explicitly to opt into
-    # the independently-tested `pyinfercnv.bayesnet` direct API. This
-    # footgun-avoidance will be reverted when orchestrator wires BayesNet.
+    # **0.0** (Bayes off) so callers using the default `InferCNVConfig` do
+    # not implicitly trigger BayesNet — set to 0.5 explicitly to enable.
+    # The orchestrator (pipeline_phase3.run_phase3) is now wired and
+    # consumes `result.hspike_calibration` / `result.i3_state_mus` /
+    # `result.i3_state_sigmas` persisted by Phase 2.
     BayesMaxPNormal: float = 0.0  # noqa: N815
     # R `inferCNV_ops.R:271` — per-cell / per-consensus / per-subcluster
     # CNV report layout. Only the choice of aggregator for downstream
@@ -82,9 +81,8 @@ class InferCNVConfig:  # noqa: N801
     # R `inferCNV_ops.R:330`. BH-adjusted p-value threshold.
     mask_nonDE_pval: float = 0.05  # noqa: N815
     # R `inferCNV_ops.R:331`. `test.use` → `test_use` (dot→underscore).
-    # R supports "wilcoxon", "t", "perm"; pyinfercnv skeleton targets
-    # "wilcoxon" first and leaves "t" as a stretch. "perm" (coin package)
-    # is out of scope.
+    # R supports "wilcoxon", "t", "perm"; pyinfercnv implements "wilcoxon"
+    # (default) and "t" lazily. "perm" (R coin package) is out of scope.
     test_use: Literal["wilcoxon", "t"] = "wilcoxon"
     # R `inferCNV_ops.R:332`. "any" / "most" / "all" — how many normal
     # types a gene must be DE against before it's retained.

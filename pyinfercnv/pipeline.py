@@ -312,6 +312,47 @@ def infercnv(
         result.cnv_matrix_f64 = None
         result.cpm_matrix_f32 = None
 
+    # Phase 3 — BayesNet / mask_non_DE / denoise + R-faithful step 20 proxy.
+    # Triggered when HMM is on (R runs step 20 whenever ``HMM=TRUE``,
+    # ``inferCNV_ops.R:1463-1499``) OR any Phase 3 toggle is active.
+    phase3_on = (
+        bool(cfg.HMM)
+        or cfg.BayesMaxPNormal > 0.0
+        or bool(getattr(cfg, "mask_nonDE_genes", False))
+        or bool(cfg.denoise)
+    )
+    if phase3_on:
+        # Fail-loud guards for branches the new top-level integration newly
+        # exposes (previously unreachable because ``infercnv()`` did not call
+        # ``run_phase3`` at all).
+        if cfg.denoise and getattr(cfg, "noise_logistic", False):
+            raise NotImplementedError(
+                "infercnv: denoise=True with noise_logistic=True is not implemented "
+                "(R inferCNV_heatmap.R:2783, py ref_mean_sd.py:128). Set "
+                "noise_logistic=False or implement the sigmoidal mask branch."
+            )
+        # BayesNet requires HMM (consumes hmm_states + hspike_calibration / i3
+        # emission params, all populated only by Phase 2 when ``cfg.HMM=True``).
+        if not cfg.HMM and cfg.BayesMaxPNormal > 0.0:
+            raise ValueError(
+                "infercnv: BayesMaxPNormal>0 requires HMM=True (BayesNet "
+                "consumes hmm_states + hspike_calibration / i3 emission params "
+                "from Phase 2)."
+            )
+        # mask_nonDE_genes is a Python-only HMM dependency: step 21 consumes
+        # ``result.subclusters`` from Phase 2. R itself does NOT require HMM
+        # for mask_non_DE (``inferCNV_mask_non_DE.R:35`` reads
+        # observation_grouped_cell_indices / reference_grouped_cell_indices).
+        if not cfg.HMM and bool(getattr(cfg, "mask_nonDE_genes", False)):
+            raise ValueError(
+                "infercnv: mask_nonDE_genes=True currently requires HMM=True in "
+                "Python because step 21 consumes result.subclusters from Phase 2 "
+                "(see pyinfercnv/mask_de/wilcoxon.py). R itself does not "
+                "require HMM for mask_non_DE — this is a Python-side limitation."
+            )
+        from pyinfercnv.pipeline_phase3 import run_phase3
+        result = run_phase3(result, config=cfg)
+
     if inplace:
         result.write_to_anndata(adata, key_added=key_added)
         return None

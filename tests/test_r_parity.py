@@ -731,13 +731,14 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
 
 
 # ============================================================================
-# Phase 3 — skeleton parity gates (pytest.skip until implementations land)
+# Phase 3 parity gates (R steps 18-22)
 # ============================================================================
 #
-# These three tests are wired in SKELETON form. They skip cleanly until the
-# matching R TSVs exist AND the Python Phase 3 modules are implemented (i.e.
-# :attr:`InferCNVResult.bayes_posterior` / ``de_mask`` / ``denoised_matrix``
-# are populated by :func:`pyinfercnv.pipeline_phase3.run_phase3`).
+# Test fixtures are loaded via ``_r_step_available`` — tests skip cleanly when
+# the matching R TSV is absent (re-emit with ``Rscript tests/r_reference.R``).
+# Phase 3 modules (BayesNet step 18+19, mask_non_DE step 21, denoise step 22,
+# state→CN-ratio step 20) are all implemented and wired into
+# :func:`pyinfercnv.pipeline_phase3.run_phase3`.
 #
 # Step numbering uses R's `step_count` convention from `inferCNV_ops.R`:
 #   step 18 = BayesNet Gibbs (Agent B1)
@@ -775,9 +776,13 @@ def _build_bayesnet_inputs(raw_counts_all, annotations, gene_order):
     adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
     ref_cats = _ref_cats_from_adata(adata)
 
+    # reassignCNVs=False matches the R fixture (tests/r_reference.R:323) and
+    # the Python port's removeCNV-only support. R's default is True, but the
+    # Py Gibbs kernel does not implement the reassign branch (gibbs.py:186-190);
+    # _step18_bayesnet now raises NotImplementedError when reassignCNVs=True.
     cfg = InferCNVConfig(
         cutoff=1, HMM=True, HMM_type="i6", BayesMaxPNormal=0.5,
-        random_state=42,
+        reassignCNVs=False, random_state=42,
     )
 
     cfg_p1 = InferCNVConfig(
@@ -1061,6 +1066,125 @@ def test_step19_filter_high_p_normals(raw_counts_all, annotations, gene_order):
     assert mean_jaccard >= 0.94, (
         f"step19 post-filter Jaccard={mean_jaccard:.3f} below floor 0.94"
     )
+
+
+def test_step20_state_proxy_parity():
+    """Phase 3 step 20 — state→CN-ratio lookup bit-exact parity (Agent C).
+
+    Verifies that :func:`_step20_assign_states_to_proxy_expr_vals` maps
+    the i6 HMM state matrix (from ``step17_hmm_i6.tsv``) to the proxy
+    expression values with max_abs_diff < 1e-10 against R's output in
+    ``step20_proxy_i6.tsv``.
+
+    R source: ``inferCNV_HMM.R:1191-1205`` (i6) and
+    ``inferCNV_i3HMM.R:405-416`` (i3). Python states are 0-based;
+    R fixtures are 1-based (written as integer state labels, remapped
+    to float CN ratios by step 20).
+
+    Skip-when-missing: fixture must be generated via
+    ``Rscript tests/r_reference.R`` (Agent C block at end of file).
+    """
+    if not _r_step_available("step20_proxy_i6"):
+        pytest.skip(
+            "step20_proxy_i6.tsv not generated; run Rscript tests/r_reference.R"
+        )
+    if not _r_step_available("step17_hmm_i6"):
+        pytest.skip(
+            "step17_hmm_i6.tsv (step20 input) missing; run Rscript tests/r_reference.R"
+        )
+
+    from pyinfercnv.pipeline_phase3 import _step20_assign_states_to_proxy_expr_vals
+
+    # Load R step17 HMM state matrix: genes × cells, 1-based integer states.
+    r17_df = pd.read_csv(R_OUT_DIR / "step17_hmm_i6.tsv", sep="\t", index_col=0)
+    r17_states_1based = r17_df.to_numpy(dtype=np.int32)  # (n_genes, n_cells)
+    r17_genes = r17_df.index.tolist()
+    r17_cells = r17_df.columns.tolist()
+
+    # Load R step20 proxy output: genes × cells, float64 CN ratios.
+    r20_mat, r20_genes, r20_cells = _load_r_step("step20_proxy_i6")  # (n_genes, n_cells)
+
+    assert r17_genes == r20_genes, "step17/step20 gene lists diverge"
+    assert r17_cells == r20_cells, "step17/step20 cell lists diverge"
+
+    # Build a minimal mock result / config (no anndata needed — pure lookup).
+    class _MockConfig:
+        HMM_type = "i6"
+
+    class _MockResult:
+        pass
+
+    # Python hmm_states is (n_cells, n_genes) 0-based; convert from R's
+    # (n_genes, n_cells) 1-based layout.
+    py_states_0based = (r17_states_1based.T - 1).astype(np.int8)  # (n_cells, n_genes)
+
+    mock_result = _MockResult()
+    mock_result.hmm_states = py_states_0based
+    mock_result.hmm_states_i3 = None
+
+    proxy_py = _step20_assign_states_to_proxy_expr_vals(
+        mock_result,  # type: ignore[arg-type]
+        _MockConfig(),  # type: ignore[arg-type]
+    )  # (n_cells, n_genes) float64
+
+    # Transpose Python output to genes × cells for direct comparison with R TSV.
+    proxy_py_genes_x_cells = proxy_py.T  # (n_genes, n_cells)
+
+    diff = max_abs_diff(proxy_py_genes_x_cells, r20_mat)
+    print(f"  step20 state_proxy i6 max_diff={diff:.3e}")
+    assert diff < 1e-10, f"step20 state_proxy i6 max_diff={diff:.3e} (expected bit-exact < 1e-10)"
+
+
+def test_step20_state_proxy_i3_parity():
+    """Phase 3 step 20 — i3 state→CN-ratio lookup bit-exact parity.
+
+    Mirror of :func:`test_step20_state_proxy_parity` for the i3 path. The
+    i3 lookup is ``[0.5, 1.0, 1.5]`` (R: ``inferCNV_i3HMM.R:409-411``);
+    Python's ``_I3_STATE_TO_CN`` indexes 0-based.
+    """
+    if not _r_step_available("step20_proxy_i3"):
+        pytest.skip(
+            "step20_proxy_i3.tsv not generated; run Rscript tests/r_reference.R"
+        )
+    if not _r_step_available("step17_hmm_i3"):
+        pytest.skip(
+            "step17_hmm_i3.tsv (step20 input) missing; run Rscript tests/r_reference.R"
+        )
+
+    from pyinfercnv.pipeline_phase3 import _step20_assign_states_to_proxy_expr_vals
+
+    r17_df = pd.read_csv(R_OUT_DIR / "step17_hmm_i3.tsv", sep="\t", index_col=0)
+    r17_states_1based = r17_df.to_numpy(dtype=np.int32)
+    r17_genes = r17_df.index.tolist()
+    r17_cells = r17_df.columns.tolist()
+
+    r20_mat, r20_genes, r20_cells = _load_r_step("step20_proxy_i3")
+
+    assert r17_genes == r20_genes, "step17/step20 i3 gene lists diverge"
+    assert r17_cells == r20_cells, "step17/step20 i3 cell lists diverge"
+
+    class _MockConfig:
+        HMM_type = "i3"
+
+    class _MockResult:
+        pass
+
+    py_states_0based = (r17_states_1based.T - 1).astype(np.int8)
+
+    mock_result = _MockResult()
+    mock_result.hmm_states = None
+    mock_result.hmm_states_i3 = py_states_0based
+
+    proxy_py = _step20_assign_states_to_proxy_expr_vals(
+        mock_result,  # type: ignore[arg-type]
+        _MockConfig(),  # type: ignore[arg-type]
+    )
+
+    proxy_py_genes_x_cells = proxy_py.T
+
+    diff = max_abs_diff(proxy_py_genes_x_cells, r20_mat)
+    print(f"  step20 state_proxy i3 max_diff={diff:.3e}")
+    assert diff < 1e-10, f"step20 state_proxy i3 max_diff={diff:.3e} (expected bit-exact < 1e-10)"
 
 
 def test_step21_mask_non_DE_parity():  # noqa: N802 — matches R name

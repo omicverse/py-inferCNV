@@ -48,20 +48,47 @@ def _step18_bayesnet(
     The caller is responsible for supplying per-state (mu, sigma) —
     Phase 2 already computes these to drive the HMM emission.
 
+    Since Phase 2 now persists the emission handoff onto
+    :class:`pyinfercnv.result.InferCNVResult` (fields
+    ``hspike_calibration`` for i6 and ``i3_state_mus`` /
+    ``i3_state_sigmas`` for i3), a future orchestrator branch in
+    :func:`pyinfercnv.pipeline_phase3.run_phase3` can auto-source them::
+
+        if result.hspike_calibration is not None:
+            gibbs, filtered = _step18_bayesnet(
+                result, config, i6_calibration=result.hspike_calibration,
+            )
+        else:
+            gibbs, filtered = _step18_bayesnet(
+                result, config,
+                i3_mus=result.i3_state_mus,
+                i3_sigmas=result.i3_state_sigmas,
+            )
+
+    The function signature still takes the emission params as explicit
+    kwargs for flexibility (tests supply them directly) — automatic
+    result-field sourcing is the orchestrator's responsibility.
+
     Parameters
     ----------
     result
         Phase-2 :class:`InferCNVResult` carrying ``cnv_matrix_fc``,
         ``subclusters``, ``hmm_states`` (i6) or ``hmm_states_i3`` (i3),
-        and ``cnv_regions``.
+        and ``cnv_regions``. Since Phase 2's Agent-D patch, also carries
+        ``hspike_calibration`` (i6) / ``i3_state_mus`` / ``i3_state_sigmas``
+        (i3) which the orchestrator forwards into the kwargs below.
     config
         :class:`InferCNVConfig`. Consumed fields: ``HMM_type``,
         ``BayesMaxPNormal``, ``random_state``.
     i6_calibration
         Required when ``HMM_type='i6'``; the Phase 2 hspike calibration.
+        The orchestrator in ``pipeline_phase3.run_phase3`` passes
+        ``result.hspike_calibration`` here.
     i3_mus, i3_sigmas
         Required when ``HMM_type='i3'``; per-state params from
-        :func:`pyinfercnv.hmm.i3.estimate_i3_state_params`.
+        :func:`pyinfercnv.hmm.i3.estimate_i3_state_params`. The
+        orchestrator passes ``result.i3_state_mus`` / ``result.i3_state_sigmas``
+        here.
     numBurnin, numSamples, numChains
         Gibbs knobs; see :func:`run_bayesnet_gibbs`.
 
@@ -73,6 +100,21 @@ def _step18_bayesnet(
         ``(n_cells, n_bins)`` int8 — the input HMM state matrix with
         high-P(normal) regions overwritten to neutral.
     """
+    # R default is reassignCNVs=TRUE (``inferCNV_BayesNet.R::removeCNV`` reassign
+    # branch), but the Python Gibbs port at ``pyinfercnv/bayesnet/gibbs.py:186-190``
+    # only implements the removeCNV-only branch. ``InferCNVConfig.reassignCNVs``
+    # currently defaults to True for R alignment, so without this guard the kwarg
+    # is silently dropped (it is never forwarded into ``run_bayesnet_gibbs``).
+    # Fail loud at the orchestrator boundary instead of letting users get
+    # remove-only behaviour while they think reassign is enabled.
+    if getattr(config, "reassignCNVs", False):
+        raise NotImplementedError(
+            "_step18_bayesnet: config.reassignCNVs=True is not implemented "
+            "(R inferCNV_BayesNet.R::removeCNV reassign branch). Set "
+            "reassignCNVs=False on InferCNVConfig to use the removeCNV-only "
+            "port, or implement the reassign branch in pyinfercnv.bayesnet.gibbs."
+        )
+
     hmm_type = config.HMM_type
     if hmm_type == "i6":
         if i6_calibration is None:

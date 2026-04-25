@@ -46,20 +46,23 @@ arbitrary algorithm-internal labels with no py-vs-R semantic contract
 | `Viterbi.dthmm.adj` kernel (R `inferCNV_HMM.R:1101-1175`) | `kernels.hmm_viterbi_numba._rstyle_log_emit` + `_viterbi_dp_numba` | 2 | kernel-isolated parity | ✓ | Jaccard 0.9999 on R-aligned input (R step15 + step16 → py kernel) per `scripts/triage_i3/triage_real_data.py` |
 | `pipeline_phase2.run_phase2` top-level orchestration | `pipeline_phase2.run_phase2` | 2 | — | ✓ | invoked from `pipeline.infercnv()` when `config.HMM=True` |
 
-## Phase 3 (R steps 18-19, 21-22) — **Skeleton in progress**
+## Phase 3 (R steps 18-22) — **Implemented**
 
-Status: pipeline_phase3 orchestrator + three module stubs landed 2026-04-24
-(raise NotImplementedError when their toggles fire; no-op otherwise).
-Implementation split across Agents B1 / B2 / B3; see
-`docs/superpowers/plans/2026-04-24-phase3-start.md`.
+Status: pipeline_phase3 orchestrator wired into top-level `infercnv()` on
+2026-04-25 (post `2026-04-25-phase3-wire-fix-execution` plan). Phase 3
+fires whenever `cfg.HMM=True` (R-faithful step 20 per
+`inferCNV_ops.R:1463-1499`) or any of `BayesMaxPNormal>0` /
+`mask_nonDE_genes` / `denoise` is set.
 
 | R source | Python submodule | Tier target | Status |
 |---|---|---|---|
-| `inferCNV_BayesNet` (Gibbs, rjags BUGS_Mixture_Model) | `bayesnet/gibbs` | 3.5 \|ΔP\|<0.05 | Skeleton (Agent B1) |
-| `inferCNV_mask_non_DE` (Wilcoxon/BH per subcluster vs ref) | `mask_de/wilcoxon` | 4 bit-exact (target) | Skeleton (Agent B2) |
-| `clear_noise_via_ref_mean_sd` (`inferCNV_ops.R:2302-2346`) | `denoise/ref_mean_sd` | 4 bit-exact | Skeleton (Agent B3) |
-| `filterHighPNormals` (R step 19) | co-located in `bayesnet/` | — | Part of Agent B1 |
-| `pipeline_phase3.run_phase3` top-level orchestration | `pipeline_phase3.run_phase3` | — | Skeleton; no-op when all toggles off, raises otherwise |
+| `inferCNV_BayesNet` (Gibbs, rjags BUGS_Mixture_Model) | `bayesnet/gibbs` | 3.5 \|ΔP\|<0.10 (soft) | Implemented; soft-tier ≥90% on oligo. `reassignCNVs=True` raises (removeCNV-only port). |
+| `inferCNV_mask_non_DE` (Wilcoxon/BH per subcluster vs ref) | `mask_de/wilcoxon` | 4 bit-exact | Implemented; `max_diff=1.110e-16`, xor_frac < 1e-4. |
+| `clear_noise_via_ref_mean_sd` (`inferCNV_ops.R:2302-2346`) | `denoise/ref_mean_sd` | 4 bit-exact | Implemented; `noise_logistic=True` raises (sigmoidal mask not ported). |
+| `assign_HMM_states_to_proxy_expr_vals` (R step 20, i6+i3) | `pipeline_phase3._step20_assign_states_to_proxy_expr_vals` | 4 bit-exact | Implemented; both i6 and i3 `max_diff=0.000e+00`. |
+| `filterHighPNormals` (R step 19) | `bayesnet/filter_high_p_normals` | — | Implemented; post-filter Jaccard ≥0.94. |
+| `pipeline_phase3.run_phase3` top-level orchestration | `pipeline_phase3.run_phase3` | — | Implemented; persists `bayes_posterior` (canonical key `cnv_posterior`), `de_mask`, `denoised_matrix`, `hmm_proxy_matrix`. |
+| `pipeline.infercnv()` ⇒ Phase 3 wire | `pipeline.infercnv()` | — | Implemented; fail-loud guards for `denoise+noise_logistic`, HMM-less Bayes, HMM-less mask. Permanent regression test in `tests/integration/test_top_level_phase3.py`. |
 
 ## Phase 3b — **Not implemented**
 

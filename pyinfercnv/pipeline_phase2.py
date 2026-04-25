@@ -279,6 +279,13 @@ def run_phase2(
     hmm_type = config.HMM_type
     hmm_states_i6: NDArray[np.int8] | None = None
     hmm_states_i3: NDArray[np.int8] | None = None
+    # Phase 3 BayesNet emission handoff (persisted onto the result below so
+    # run_phase3 / _step18_bayesnet can auto-source them without re-running
+    # hspike or i3 estimation). i6-only populates hspike_calibration; i3-only
+    # populates i3_state_mus / i3_state_sigmas.
+    hspike_calibration: "HspikeCalibration | None" = None
+    i3_state_mus: NDArray[np.float64] | None = None
+    i3_state_sigmas: NDArray[np.float64] | None = None
 
     if hmm_type == "i6":
         # R-parity hspike (2026-04-23 rewrite): hspike calibration now
@@ -311,6 +318,10 @@ def run_phase2(
         )
         _profile_block(profile, "16_hspike_calibrate", _t_hspike, _rss_hspike)
 
+        # Persist the calibration onto the Phase-2 result so Phase 3 BayesNet
+        # (``_step18_bayesnet``) can auto-source it without re-running hspike.
+        hspike_calibration = cal
+
         cnv_matrix_linear_i6 = np.asarray(
             result_phase1.cnv_matrix_fc, dtype=np.float64
         )
@@ -338,6 +349,11 @@ def run_phase2(
         mus, sigs = _i3.estimate_i3_state_params(
             cnv_matrix_linear, ref_idx, config.HMM_i3_pval
         )
+        # Persist the per-state (mus, sigmas) onto the Phase-2 result so
+        # Phase 3 BayesNet (``_step18_bayesnet``) can auto-source them
+        # without re-running ``estimate_i3_state_params``.
+        i3_state_mus = mus
+        i3_state_sigmas = sigs
         hmm_states_i3 = _run_hmm_by_subcluster(
             cnv_matrix_linear, chr_pos, subclusters, is_reference,
             hmm_type="i3",
@@ -377,6 +393,9 @@ def run_phase2(
         hmm_states=hmm_states_i6,
         hmm_states_i3=hmm_states_i3,
         cnv_regions=cnv_regions,
+        hspike_calibration=hspike_calibration,
+        i3_state_mus=i3_state_mus,
+        i3_state_sigmas=i3_state_sigmas,
         profile=profile,
     )
     return result
