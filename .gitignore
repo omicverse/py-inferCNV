@@ -34,6 +34,7 @@ scripts/triage_i3/
 scripts/triage_phase1/
 scripts/codex_review_sanitize.py
 scripts/codex_review.sh
+tests/unit/test_codex_sanitize.py
 
 # Raw codex session dumps — archive relevant ones as docs/superpowers/reviews/*.raw.md
 # with a banner; keep stray .log files local-only to avoid leaking injection payloads.
