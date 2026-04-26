@@ -17,6 +17,16 @@ Python ≥3.10, <3.13. Wheel is `py3-none-any` (pure Python; numba JIT at first 
 
 ## Quickstart
 
+**30 seconds, no fixture download** — runs on synthetic data, prints the populated
+`InferCNVResult` schema, saves a heatmap PNG:
+
+```bash
+uv run python examples/quickstart_30s.py
+# or: python examples/quickstart_30s.py
+```
+
+**Real workflow on your own AnnData**:
+
 ```python
 import scanpy as sc
 from pyinfercnv import infercnv
@@ -41,6 +51,11 @@ infercnv(
 #   adata.uns["cnv"]["profile"]              — per-block wallclock / RSS
 #   adata.uns["cnv_ref_counts_raw"]          — raw ref counts (Phase 2 prep)
 ```
+
+**Phase 2 + 3** — set `HMM=True` (and optionally `BayesMaxPNormal=0.5`,
+`mask_nonDE_genes=True`, `denoise=True`, `reassignCNVs=False`); see
+`examples/tutorial_phase{1,2,3}.ipynb` for end-to-end notebook walk-throughs
+on the bundled R inferCNV oligodendroglioma fixture.
 
 CLI:
 

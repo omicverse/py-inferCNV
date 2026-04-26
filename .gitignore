@@ -15,7 +15,9 @@ benchmarks/**/py_out/
 # the source of truth is the harness, not the TSV dumps or per-patient r_out.
 benchmarks/phase2/
 examples/*.executed.ipynb.bak
+.ipynb_checkpoints/
 /tmp_*
+quickstart_30s_heatmap.png
 
 # Raw codex session dumps — archive relevant ones as docs/superpowers/reviews/*.raw.md
 # with a banner; keep stray .log files local-only to avoid leaking injection payloads.
