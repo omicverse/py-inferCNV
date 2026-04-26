@@ -68,8 +68,9 @@ divergence.
 
 ### Tests
 
-- pytest: **220 passed** (excluding `tests/test_regression.py`)
-  - +5 vs 0.2.0.dev2 baseline 215: orchestrator unit (P0.2), step20 i3 parity (P2.2), 3 top-level integration tests (P1.1)
+- pytest: **209 passed, 4 skipped** (excluding `tests/test_regression.py`)
+  - +5 functional tests vs 0.2.0.dev2 baseline 215: orchestrator unit (P0.2), step20 i3 parity (P2.2), 3 top-level integration tests (P1.1)
+  - The 4 SKIPs are `tests/unit/test_kernels_viterbi_adj.py` cells that need a local R triage dump (`scripts/triage_i3/r_dump/`); they pass when R is set up, skip cleanly otherwise.
 - Wheel: `pyinfercnv-0.2.0-py3-none-any.whl`; `twine check` PASSED. Pure-Python (no `.so`/`.pyd`/`.dylib`); numba `@njit(cache=True)` for hot kernels only.
 - R-parity gate: `tests/test_r_parity.py` 19/19 passed.
 
