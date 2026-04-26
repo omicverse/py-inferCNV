@@ -19,7 +19,7 @@ CNV matrix (the quantity every downstream step consumes).
 | step04 log2(x+1) | `preprocess.log_transform` | < 1e-10 | bit-exact |
 | step08 subtract_ref_mean | `preprocess.subtract_ref` | < 1e-10 | bit-exact |
 | step09 max_threshold | `preprocess.max_threshold` | < 1e-10 | bit-exact |
-| step10 smooth_pyramidinal | `kernels.smooth_tail` | < 1e-10 | bit-exact (post 9f213cf) |
+| step10 smooth_pyramidinal | `kernels.smooth_tail` | < 1e-10 | bit-exact (post `edddb51`) |
 | step11 center_cells | `preprocess.center_cells` | < 1e-10 | bit-exact |
 | step14 invert_log2 | `preprocess.invert_log2` | < 1e-10 | bit-exact |
 | step16 prune_outliers | `preprocess.prune_outliers` | < 1e-10 | bit-exact |
@@ -35,8 +35,8 @@ preserves float64 precision via the `cnv_matrix_f64` companion field.
 |---|---|---|---|
 | Leiden subclusters | `inferCNV_tumor_subclusters.R` | operational floor 0.85 | ARI **1.000** on oligo (ARI retired as parity metric — Leiden labels are arbitrary; cluster identity not a parity contract) |
 | HMM Viterbi (i6 + i3) | `inferCNV_HMM.R::Viterbi.dthmm.adj` | bit-exact kernel | numba `@njit` port; 0.9999 Jaccard on R-aligned input |
-| hspike i6 calibration | `inferCNV_hidden_spike.R::.build_and_add_hspike` | structural rules D.1-D.7 | strict R-parity rewrite (commit `384e983`) |
-| step17 HMM i3 Jaccard | — | — | **1.000** (bit-exact post linear-FC switch, commit `8ed9318`) |
+| hspike i6 calibration | `inferCNV_hidden_spike.R::.build_and_add_hspike` | structural rules D.1-D.7 | strict R-parity rewrite (commit `3d9ec79`) |
+| step17 HMM i3 Jaccard | — | — | **1.000** (bit-exact post linear-FC switch, commit `a8d4526`) |
 | step17 HMM i6 Jaccard | — | — | **0.979** on oligo (HEAD measurement) |
 | Spearman ρ (CNV matrix) | — | primary parity metric | **1.0000** on DCIS1/TNBC1/TNBC3 10x UMI; **0.9998** on oligo smart-seq2 |
 
@@ -47,7 +47,7 @@ preserves float64 precision via the `cnv_matrix_f64` companion field.
 | BayesNet Gibbs (step 18) | `inferCNV_BayesNet.R` (rjags BUGS Mixture Model) | soft-tier (\|ΔP\|<0.10) ≥90% | ✓ implemented; `removeCNV`-only port. `reassignCNVs=True` (R default) raises `NotImplementedError` at orchestrator. |
 | filterHighPNormals (step 19) | `inferCNV_BayesNet.R::filterHighPNormals` | post-filter Jaccard ≥0.94 | ✓ implemented (Jaccard 0.979 on oligo) |
 | state→CN-ratio proxy (step 20) | `inferCNV_HMM.R:1195-1200` (i6) + `inferCNV_i3HMM.R:409-411` (i3) | bit-exact | ✓ both i6 and i3 `max_diff = 0.000e+00` |
-| mask_non_DE (step 21) | `inferCNV_mask_non_DE.R` | bit-exact | ✓ matrix `max_diff = 1.110e-16`; mask boolean xor_frac < 1e-4 (residual-inference soft floor — see commit `f468e2d`) |
+| mask_non_DE (step 21) | `inferCNV_mask_non_DE.R` | bit-exact | ✓ matrix `max_diff = 1.110e-16`; mask boolean xor_frac < 1e-4 (residual-inference soft floor — see commit `ddd3c32` Phase 3 land) |
 | denoise (step 22) | `inferCNV_ops.R:2302-2346` (`clear_noise_via_ref_mean_sd`) | bit-exact | ✓ implemented; `noise_logistic=True` (R sigmoidal mask) raises `NotImplementedError` |
 | Top-level `pipeline.infercnv()` ⇒ Phase 3 | — | — | ✓ `cfg.HMM=True` or any of `BayesMaxPNormal>0`/`mask_nonDE_genes`/`denoise` triggers `run_phase3`; permanent regression test in `tests/integration/test_top_level_phase3.py` |
 
@@ -85,7 +85,7 @@ orchestrator boundary (set the listed flag to use the supported branch):
 - `preprocess threshold='auto'` (R threshold-auto branch at `preprocess/max_threshold.py`)
 - `denoise apply_median_filtering` (R alt denoise path)
 - Phase 3b variational approximation of Gibbs (`bayesnet/vb` — performance optimization; full-quality Gibbs is the primary path)
-- i6 hspike μ/σ baseline drift (Jaccard 0.918 → 0.979 between commit `384e983` and HEAD; root cause not isolated, no regression — see `CODEX_HANDOFF.md §0.1-B`)
+- i6 hspike μ/σ baseline drift (Jaccard 0.918 → 0.979 between commit `3d9ec79` and HEAD; root cause not isolated, no regression — diagnostic history)
 
 ### Codex collaboration
 
@@ -231,19 +231,19 @@ and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 - **Phase 2 — tumor subclustering**: `pyinfercnv.subcluster.leiden` on the
   python-igraph C-core Leiden partitioner with per-annotation-group mode
   (`cluster_by_groups=True`). Honors `random_state`; cross-platform
-  deterministic (codex C1 fix, commit `4b7206d`).
+  deterministic (codex C1 fix, commit `7c9eb8c`).
 - **Phase 2 — HMM state calls**: `pyinfercnv.hmm.i6` (6-state) and
   `pyinfercnv.hmm.i3` (3-state) populate `InferCNVResult.hmm_states` and
   `InferCNVResult.hmm_states_i3`. Numba-JIT Viterbi kernel
   (`pyinfercnv.kernels.hmm_viterbi_numba`) implements R's `Viterbi.dthmm.adj`
-  emission semantics (codex C5 fix, commit `e32adcf`).
+  emission semantics (codex C5 fix, commit `7ed3596`).
 - **Phase 2 — hspike calibration (i6)**: synthetic-spike NB parameter fit
   for i6 emission means (`pyinfercnv.hmm.hspike.calibrate_i6_emission`).
 - **Phase 2 — CNV region calls**: `InferCNVResult.cnv_regions` BED-like
   DataFrame (per cell-group / chromosome, RLE over states).
 - **Phase 2 — Phase 1 filter-population fix**: pipeline now filters genes
   on all cells (not ref cells only), closing the Phase 1 upstream-alignment
-  gap that was suppressing tier-4 parity (commit `90eabe1`).
+  gap that was suppressing tier-4 parity (commit `5ff778d`).
 - **Phase 2 — py-vs-R wallclock + regression-detection harness**:
   `scripts/phase2_benchmark/` drives R infercnv + pyinfercnv side-by-side
   across the pycopykat-sliced patient corpus (Gao2021_Breast,
@@ -288,7 +288,7 @@ and `docs/superpowers/reviews/track-a-closeout-codex.md`.
 - Breaking — `pyinfercnv.preprocess.filter_low_expression_genes` removed
   the `reference_cell_idx` kwarg (pre-PyPI; no external callers). The
   hspike caller that needed ref-only filtering uses explicit
-  `X[ref_idx, :]` slicing before the call instead (commit `4aacc01`).
+  `X[ref_idx, :]` slicing before the call instead (commit `1f408a8`).
 
 ## 0.1.0.dev0 (unreleased)
 

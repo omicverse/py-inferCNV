@@ -19,6 +19,22 @@ examples/*.executed.ipynb.bak
 /tmp_*
 quickstart_30s_heatmap.png
 
+# Internal planning / review / diagnostic history — kept locally for the
+# maintainer's reference but not part of the public release. Public-facing
+# reference docs at the docs/superpowers/ root level (e.g.
+# algorithm_correspondence_R_vs_Python.md, build_path_R_to_pyinfercnv.md)
+# are trackable.
+docs/superpowers/findings/
+docs/superpowers/plans/
+docs/superpowers/reviews/
+docs/superpowers/templates/
+CODEX_HANDOFF.md
+scripts/track_a1/
+scripts/triage_i3/
+scripts/triage_phase1/
+scripts/codex_review_sanitize.py
+scripts/codex_review.sh
+
 # Raw codex session dumps — archive relevant ones as docs/superpowers/reviews/*.raw.md
 # with a banner; keep stray .log files local-only to avoid leaking injection payloads.
 *.log
