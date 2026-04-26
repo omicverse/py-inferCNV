@@ -20,14 +20,8 @@ examples/*.executed.ipynb.bak
 quickstart_30s_heatmap.png
 
 # Internal planning / review / diagnostic history — kept locally for the
-# maintainer's reference but not part of the public release. Public-facing
-# reference docs at the docs/superpowers/ root level (e.g.
-# algorithm_correspondence_R_vs_Python.md, build_path_R_to_pyinfercnv.md)
-# are trackable.
-docs/superpowers/findings/
-docs/superpowers/plans/
-docs/superpowers/reviews/
-docs/superpowers/templates/
+# maintainer's reference but not part of the public release.
+docs/superpowers/
 CODEX_HANDOFF.md
 scripts/track_a1/
 scripts/triage_i3/

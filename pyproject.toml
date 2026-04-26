@@ -9,7 +9,7 @@ description = "A pure-Python re-implementation of inferCNV (Broad Institute) —
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.10,<3.13"
-authors = [{ name = "Jason", email = "lucyagune3@gmail.com" }]
+authors = [{ name = "xianjieshen", email = "lucyagune3@gmail.com" }]
 keywords = [
   "single-cell",
   "scRNA-seq",
