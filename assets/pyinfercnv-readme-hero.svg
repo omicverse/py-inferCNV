@@ -1,0 +1,131 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">py-inferCNV README hero</title>
+  <desc id="desc">Product-style README banner for py-inferCNV, a Python-first inferCNV-style single-cell CNV analysis and visualization package.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="0.55" stop-color="#f5f8ff"/>
+      <stop offset="1" stop-color="#eef3ff"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#111b6d"/>
+      <stop offset="0.52" stop-color="#253ee8"/>
+      <stop offset="1" stop-color="#8d45ff"/>
+    </linearGradient>
+    <linearGradient id="heat" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0846d9"/>
+      <stop offset="0.22" stop-color="#7fa4ff"/>
+      <stop offset="0.5" stop-color="#ffffff"/>
+      <stop offset="0.76" stop-color="#ff9a9a"/>
+      <stop offset="1" stop-color="#db101d"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#31416f" flood-opacity="0.18"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+    <style>
+      .font{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+      .navy{fill:#101a52}.muted{fill:#43506f}.softText{fill:#66708f}
+      .chip{fill:#ffffff;stroke:#dfe7fb;stroke-width:1.5}.thin{stroke:#d9e2f7;stroke-width:1.4}
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="120" cy="790" r="220" fill="#d8e8ff" opacity="0.45" filter="url(#soft)"/>
+  <circle cx="1430" cy="120" r="210" fill="#eadfff" opacity="0.55" filter="url(#soft)"/>
+  <circle cx="1110" cy="800" r="300" fill="#d7ecff" opacity="0.5" filter="url(#soft)"/>
+
+  <g opacity="0.18" stroke="#7e93c7" stroke-width="6" fill="none">
+    <path d="M-20 85 C70 10,125 10,215 85"/>
+    <path d="M-20 155 C70 80,125 80,215 155"/>
+    <path d="M18 55 L177 185M58 35 L217 165M-15 125 L143 252" stroke-width="3"/>
+  </g>
+
+  <g transform="translate(70,122)">
+    <path d="M70 0 L140 42 L140 126 L70 168 L0 126 L0 42 Z" fill="#ffffff" stroke="url(#titleGrad)" stroke-width="7"/>
+    <rect x="38" y="48" width="18" height="74" rx="3" fill="#1747e8"/>
+    <rect x="62" y="28" width="18" height="94" rx="3" fill="#8c6cff" opacity="0.92"/>
+    <rect x="86" y="42" width="18" height="80" rx="3" fill="#f55f98" opacity="0.78"/>
+    <rect x="110" y="62" width="18" height="60" rx="3" fill="#ff9fb9" opacity="0.82"/>
+    <line x1="36" y1="82" x2="128" y2="82" stroke="#ffffff" stroke-width="5" opacity="0.8"/>
+    <line x1="36" y1="105" x2="128" y2="105" stroke="#ffffff" stroke-width="5" opacity="0.8"/>
+  </g>
+
+  <text x="245" y="213" class="font" font-size="94" font-weight="850" fill="#071152">py-inferCNV</text>
+  <text x="245" y="292" class="font muted" font-size="39" font-weight="700">Python-first inferCNV-style analysis</text>
+  <text x="245" y="342" class="font muted" font-size="39" font-weight="700">and visualization for <tspan fill="url(#titleGrad)">single-cell</tspan></text>
+  <text x="245" y="392" class="font" font-size="43" font-weight="850" fill="url(#titleGrad)">CNV landscapes</text>
+
+  <g class="font" font-size="19" font-weight="700">
+    <g transform="translate(245,435)"><rect class="chip" width="185" height="54" rx="17"/><text x="21" y="34" fill="#4021b7">◉ reference-aware</text></g>
+    <g transform="translate(448,435)"><rect class="chip" width="184" height="54" rx="17"/><text x="20" y="34" fill="#0862bc">▥ genome heatmap</text></g>
+    <g transform="translate(650,435)"><rect class="chip" width="145" height="54" rx="17"/><text x="20" y="34" fill="#087c55">● single-cell</text></g>
+    <g transform="translate(814,435)"><rect class="chip" width="107" height="54" rx="17"/><text x="20" y="34" fill="#c91635">DNA CNV</text></g>
+    <g transform="translate(940,435)"><rect class="chip" width="112" height="54" rx="17"/><text x="20" y="34" fill="#b06a00">Python</text></g>
+  </g>
+
+  <line x1="245" y1="530" x2="820" y2="530" class="thin"/>
+  <g transform="translate(260,570)">
+    <circle cx="34" cy="34" r="34" fill="#f2f4ff" stroke="#cfd7ff" stroke-width="2"/>
+    <polyline points="16,43 29,28 42,39 54,21" fill="none" stroke="#765dff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="16" cy="43" r="4" fill="#765dff"/><circle cx="29" cy="28" r="4" fill="#765dff"/><circle cx="42" cy="39" r="4" fill="#765dff"/><circle cx="54" cy="21" r="4" fill="#765dff"/>
+  </g>
+  <text x="360" y="603" class="font navy" font-size="27">Explore chromosome-scale copy number</text>
+  <text x="360" y="641" class="font navy" font-size="27">signals with clean, publication-style visuals.</text>
+
+  <g transform="translate(170,690)" filter="url(#shadow)">
+    <rect width="650" height="112" rx="18" fill="#0a1428"/>
+    <circle cx="28" cy="24" r="8" fill="#ff5f67"/><circle cx="52" cy="24" r="8" fill="#ffcc37"/><circle cx="76" cy="24" r="8" fill="#2fd86b"/>
+    <rect x="557" y="12" width="72" height="32" rx="10" fill="#24314d"/>
+    <text x="576" y="34" class="font" fill="#b9c1d7" font-size="17">Python</text>
+    <text x="32" y="67" class="mono" font-size="25"><tspan fill="#d46bff">import</tspan><tspan fill="#f5f7ff"> pyinfercnv </tspan><tspan fill="#d46bff">as</tspan><tspan fill="#f5f7ff"> picnv</tspan></text>
+    <text x="32" y="103" class="mono" font-size="25"><tspan fill="#3de3ff">picnv.tl.infer_cnv</tspan><tspan fill="#f5f7ff">(adata, ref=</tspan><tspan fill="#72ef9d">'normal'</tspan><tspan fill="#f5f7ff">)</tspan></text>
+  </g>
+
+  <g transform="translate(850,85)" filter="url(#shadow)">
+    <rect width="690" height="730" rx="28" fill="#ffffff" stroke="#dfe6f6" stroke-width="1.5"/>
+    <text x="260" y="50" class="font" font-size="24" font-weight="800" fill="#12182f">inferCNV-style genome heatmap</text>
+    <text x="58" y="93" class="font softText" font-size="16" font-weight="700">chr</text>
+    <g class="font" font-size="15" fill="#15203f">
+      <text x="110" y="93">1</text><text x="145" y="93">2</text><text x="180" y="93">3</text><text x="215" y="93">4</text><text x="250" y="93">5</text><text x="285" y="93">6</text><text x="320" y="93">7</text><text x="355" y="93">8</text><text x="390" y="93">9</text><text x="420" y="93">10</text><text x="462" y="93">11</text><text x="503" y="93">12</text><text x="544" y="93">13</text><text x="584" y="93">14</text><text x="625" y="93">X</text>
+    </g>
+
+    <g transform="translate(104,112)">
+      <rect width="520" height="470" fill="#fbfcff" stroke="#cbd5ee"/>
+      <g stroke="#7f8ba8" stroke-dasharray="4 5" opacity="0.65">
+        <line x1="35" y1="0" x2="35" y2="470"/><line x1="72" y1="0" x2="72" y2="470"/><line x1="110" y1="0" x2="110" y2="470"/><line x1="148" y1="0" x2="148" y2="470"/><line x1="186" y1="0" x2="186" y2="470"/><line x1="224" y1="0" x2="224" y2="470"/><line x1="262" y1="0" x2="262" y2="470"/><line x1="300" y1="0" x2="300" y2="470"/><line x1="338" y1="0" x2="338" y2="470"/><line x1="376" y1="0" x2="376" y2="470"/><line x1="414" y1="0" x2="414" y2="470"/><line x1="452" y1="0" x2="452" y2="470"/><line x1="490" y1="0" x2="490" y2="470"/>
+      </g>
+      <line x1="0" y1="182" x2="520" y2="182" stroke="#bcc7df" stroke-width="2"/>
+      <g opacity="0.95">
+        <rect x="0" y="0" width="35" height="182" fill="#eef3ff"/><rect x="35" y="0" width="37" height="182" fill="#f9fbff"/><rect x="72" y="0" width="38" height="182" fill="#e6edff"/><rect x="110" y="0" width="38" height="182" fill="#fff7f7"/><rect x="148" y="0" width="38" height="182" fill="#f4f7ff"/><rect x="186" y="0" width="38" height="182" fill="#fffafa"/><rect x="224" y="0" width="38" height="182" fill="#eef3ff"/><rect x="262" y="0" width="38" height="182" fill="#fff4f4"/><rect x="300" y="0" width="38" height="182" fill="#f6f9ff"/><rect x="338" y="0" width="38" height="182" fill="#f4f6ff"/><rect x="376" y="0" width="38" height="182" fill="#fff1f1"/><rect x="414" y="0" width="38" height="182" fill="#edf3ff"/><rect x="452" y="0" width="38" height="182" fill="#fdfdff"/><rect x="490" y="0" width="30" height="182" fill="#f7f9ff"/>
+        <rect x="0" y="183" width="35" height="287" fill="#1248e8" opacity="0.75"/><rect x="35" y="183" width="37" height="287" fill="#6f8cff" opacity="0.72"/><rect x="72" y="183" width="38" height="287" fill="#1d5cff" opacity="0.72"/><rect x="110" y="183" width="38" height="287" fill="#ff5b68" opacity="0.78"/><rect x="148" y="183" width="38" height="287" fill="#ffb0b0" opacity="0.72"/><rect x="186" y="183" width="38" height="287" fill="#1e57e7" opacity="0.8"/><rect x="224" y="183" width="38" height="287" fill="#315fff" opacity="0.75"/><rect x="262" y="183" width="38" height="287" fill="#ff494d" opacity="0.78"/><rect x="300" y="183" width="38" height="287" fill="#ffb2b2" opacity="0.7"/><rect x="338" y="183" width="38" height="287" fill="#e9efff"/><rect x="376" y="183" width="38" height="287" fill="#ff333d" opacity="0.82"/><rect x="414" y="183" width="38" height="287" fill="#0c42d8" opacity="0.78"/><rect x="452" y="183" width="38" height="287" fill="#ff777b" opacity="0.72"/><rect x="490" y="183" width="30" height="287" fill="#d70e20" opacity="0.82"/>
+      </g>
+      <g opacity="0.45" stroke="#ffffff" stroke-width="2">
+        <path d="M0 28H520M0 58H520M0 88H520M0 118H520M0 148H520M0 218H520M0 250H520M0 282H520M0 314H520M0 346H520M0 378H520M0 410H520M0 442H520"/>
+      </g>
+    </g>
+
+    <rect x="96" y="112" width="7" height="182" fill="#1751d6"/>
+    <rect x="96" y="296" width="7" height="286" fill="#d51c2c"/>
+    <text x="32" y="195" class="font" font-size="18" font-weight="800" fill="#0b4eca" text-anchor="middle">Normal</text>
+    <text x="32" y="220" class="font" font-size="18" font-weight="800" fill="#0b4eca" text-anchor="middle">reference</text>
+    <text x="32" y="245" class="font" font-size="18" font-weight="800" fill="#0b4eca" text-anchor="middle">cells</text>
+    <text x="34" y="274" class="font" font-size="16" fill="#3f4e6f" text-anchor="middle">diploid</text>
+    <text x="32" y="415" class="font" font-size="18" font-weight="800" fill="#cf1627" text-anchor="middle">Tumor-like</text>
+    <text x="32" y="441" class="font" font-size="18" font-weight="800" fill="#cf1627" text-anchor="middle">cells</text>
+    <text x="34" y="471" class="font" font-size="16" fill="#3f4e6f" text-anchor="middle">CNV events</text>
+
+    <g transform="translate(88,625)">
+      <text x="208" y="0" class="font" font-size="17" font-weight="800" fill="#17203c">Relative copy number (log2)</text>
+      <rect x="30" y="20" width="430" height="30" fill="url(#heat)"/>
+      <text x="30" y="78" class="font" font-size="16" fill="#0d49cc">-2</text><text x="134" y="78" class="font" font-size="16" fill="#315fdc">-1</text><text x="245" y="78" class="font" font-size="16" fill="#202a44">0</text><text x="350" y="78" class="font" font-size="16" fill="#ca2334">1</text><text x="452" y="78" class="font" font-size="16" fill="#ca2334">2</text>
+      <text x="30" y="105" class="font" font-size="15" fill="#0d49cc">Deep loss</text><text x="140" y="105" class="font" font-size="15" fill="#315fdc">Loss</text><text x="232" y="105" class="font" font-size="15" fill="#202a44">Diploid</text><text x="348" y="105" class="font" font-size="15" fill="#ca2334">Gain</text><text x="435" y="105" class="font" font-size="15" fill="#ca2334">High gain</text>
+    </g>
+  </g>
+
+  <path d="M0 842 C210 780 430 832 615 815 C800 798 930 870 1120 828 C1300 788 1455 810 1600 765 L1600 900 L0 900 Z" fill="#7f67ff" opacity="0.22"/>
+  <path d="M0 875 C220 805 400 855 610 845 C820 835 950 890 1150 855 C1350 820 1500 832 1600 808 L1600 900 L0 900 Z" fill="#3485ff" opacity="0.25"/>
+</svg>
