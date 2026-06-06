@@ -199,10 +199,12 @@ def infercnv(
     chr_pos, gene_perm_local = _build_chromosome_layout(var_kept, excl)
     # Per-bin genomic coordinates aligned to the plotted column order (same
     # permutation applied to X below). Enables arm-aware (p/q) plotting.
-    _pos_cols = [c for c in ("chromosome", "start", "end") if c in var_kept.columns]
+    # Only emitted when chromosome AND start AND end are all present — a
+    # partial frame would be useless downstream (and the result contract
+    # promises None otherwise).
     bin_meta = (
-        var_kept.iloc[gene_perm_local][_pos_cols].reset_index(drop=True)
-        if "chromosome" in _pos_cols
+        var_kept.iloc[gene_perm_local][["chromosome", "start", "end"]].reset_index(drop=True)
+        if {"chromosome", "start", "end"}.issubset(var_kept.columns)
         else None
     )
     if sp.issparse(X):
