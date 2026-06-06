@@ -91,6 +91,11 @@ class InferCNVResult:
     cell_meta: pd.DataFrame
     gene_values: np.ndarray | None = None
 
+    # Per-bin genomic coordinates aligned column-for-column with cnv_matrix
+    # (chromosome / start / end), in plotted gene order. Enables arm-aware
+    # (p/q) plotting downstream. ``None`` if var lacked start/end columns.
+    bin_meta: pd.DataFrame | None = None
+
     # G1 P2
     ref_counts_raw: np.ndarray | None = None
 
@@ -149,7 +154,7 @@ class InferCNVResult:
     #   (i3 path only). ``None`` when ``config.HMM_type == "i6"`` or HMM
     #   disabled. Forward-ref on ``HspikeCalibration`` avoids a circular
     #   import with :mod:`pyinfercnv.hmm.hspike`.
-    hspike_calibration: "HspikeCalibration | None" = None
+    hspike_calibration: HspikeCalibration | None = None
     i3_state_mus: np.ndarray | None = None
     i3_state_sigmas: np.ndarray | None = None
 
@@ -181,7 +186,7 @@ class InferCNVResult:
     def chromosomes(self) -> list[str]:
         return list(self.chr_pos.keys())
 
-    def write_to_anndata(self, adata: "AnnData", *, key_added: str = "cnv") -> None:
+    def write_to_anndata(self, adata: AnnData, *, key_added: str = "cnv") -> None:
         """Persist all present fields into adata, aligning with infercnvpy conventions.
 
         Persistence layout (G1 P1 schema frozen now):
@@ -206,6 +211,8 @@ class InferCNVResult:
         adata.obsm[f"X_{key_added}"] = self.cnv_matrix
 
         uns_entry: dict[str, Any] = {"chr_pos": self.chr_pos}
+        if self.bin_meta is not None:
+            uns_entry["bin_meta"] = self.bin_meta
         if self.cnv_regions is not None:
             uns_entry["cnv_regions"] = self.cnv_regions
         if self.posterior_p_normal is not None:

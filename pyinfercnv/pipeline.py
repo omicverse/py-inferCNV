@@ -118,7 +118,7 @@ def _build_chromosome_layout(
 
 
 def infercnv(
-    adata: "AnnData",
+    adata: AnnData,
     *,
     config: InferCNVConfig | None = None,
     reference_key: str | None = None,
@@ -197,6 +197,16 @@ def infercnv(
 
     # Build chromosome layout (also drops chr_exclude genes)
     chr_pos, gene_perm_local = _build_chromosome_layout(var_kept, excl)
+    # Per-bin genomic coordinates aligned to the plotted column order (same
+    # permutation applied to X below). Enables arm-aware (p/q) plotting.
+    # Only emitted when chromosome AND start AND end are all present — a
+    # partial frame would be useless downstream (and the result contract
+    # promises None otherwise).
+    bin_meta = (
+        var_kept.iloc[gene_perm_local][["chromosome", "start", "end"]].reset_index(drop=True)
+        if {"chromosome", "start", "end"}.issubset(var_kept.columns)
+        else None
+    )
     if sp.issparse(X):
         X = X.tocsc()[:, gene_perm_local].tocsr()
     else:
@@ -287,6 +297,7 @@ def infercnv(
     # after Phase 2 or, when HMM is off, dropped before returning.
     result = InferCNVResult(
         chr_pos=chr_pos,
+        bin_meta=bin_meta,
         cnv_matrix=smoothed.astype(np.float32),
         cnv_matrix_fc=cnv_fc.astype(np.float32),
         cell_meta=cell_meta,

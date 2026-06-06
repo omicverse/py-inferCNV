@@ -151,15 +151,15 @@ _I3_CN_DELTA: dict[int, float] = {0: -1.0, 1: 0.0, 2: 1.0}
 
 
 def run_phase2(
-    result_phase1: "InferCNVResult",
-    adata: "AnnData",
+    result_phase1: InferCNVResult,
+    adata: AnnData,
     *,
-    config: "InferCNVConfig",
+    config: InferCNVConfig,
     reference_key: str | None = None,
     reference_cat: str | Sequence[str] | None = None,
     random_state: int = 42,
     profile: dict[str, Any] | None = None,
-) -> "InferCNVResult":
+) -> InferCNVResult:
     """Orchestrate R steps 15 (subcluster), hspike (i6 calibration), 17 (HMM).
 
     Short-circuits when ``config.HMM`` is False: returns ``result_phase1``
@@ -283,7 +283,7 @@ def run_phase2(
     # run_phase3 / _step18_bayesnet can auto-source them without re-running
     # hspike or i3 estimation). i6-only populates hspike_calibration; i3-only
     # populates i3_state_mus / i3_state_sigmas.
-    hspike_calibration: "HspikeCalibration | None" = None
+    hspike_calibration: HspikeCalibration | None = None
     i3_state_mus: NDArray[np.float64] | None = None
     i3_state_sigmas: NDArray[np.float64] | None = None
 
@@ -382,6 +382,7 @@ def run_phase2(
     # lifecycle across modules.
     result = InferCNVResult(
         chr_pos=result_phase1.chr_pos,
+        bin_meta=result_phase1.bin_meta,
         cnv_matrix=result_phase1.cnv_matrix,
         cnv_matrix_fc=result_phase1.cnv_matrix_fc,
         cell_meta=result_phase1.cell_meta,
@@ -410,7 +411,7 @@ def _run_subclustering(
     cnv_matrix: NDArray[np.float32],
     is_reference: NDArray[np.bool_],
     *,
-    config: "InferCNVConfig",
+    config: InferCNVConfig,
     random_state: int,
     profile: dict[str, Any] | None,
     group_labels: NDArray[np.object_] | None = None,
@@ -534,10 +535,10 @@ def _calibrate_hmm_emission(
     reference_groups: Mapping[str, NDArray[np.intp]] | None,
     *,
     observation_groups: Mapping[str, NDArray[np.intp]] | None = None,
-    config: "InferCNVConfig",
+    config: InferCNVConfig,
     random_state: int,
     profile: dict[str, Any] | None,
-) -> "HspikeCalibration":
+) -> HspikeCalibration:
     """Thin wrapper over :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission`.
 
     Exists to centralise the psutil hook placement (G1 P11 key
@@ -560,7 +561,7 @@ def _calibrate_hmm_emission(
 
 
 def _build_groups_from_obs(
-    adata: "AnnData",
+    adata: AnnData,
     is_reference: NDArray[np.bool_],
     reference_key: str | None,
     reference_cat: str | Sequence[str] | None,
@@ -611,7 +612,7 @@ def _run_hmm_by_subcluster(
     *,
     hmm_type: str,
     transition_prob: float,
-    i6_calibration: "HspikeCalibration | None",
+    i6_calibration: HspikeCalibration | None,
     i3_mus: NDArray[np.float64] | None,
     i3_sigmas: NDArray[np.float64] | None,
     profile: dict[str, Any] | None = None,
@@ -814,7 +815,7 @@ def _build_cnv_regions(
 
 
 def _validate_reference_and_raise(
-    adata: "AnnData",
+    adata: AnnData,
     reference_key: str | None,
     reference_cat: str | Sequence[str] | None,
     is_reference_fallback: NDArray[np.bool_],
@@ -856,7 +857,7 @@ def _validate_reference_and_raise(
 
 
 def _remap_ref_groups_to_local(
-    adata: "AnnData",
+    adata: AnnData,
     is_reference: NDArray[np.bool_],
     reference_key: str | None,
     reference_cat: str | Sequence[str] | None,
