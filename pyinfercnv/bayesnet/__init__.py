@@ -100,20 +100,10 @@ def _step18_bayesnet(
         ``(n_cells, n_bins)`` int8 — the input HMM state matrix with
         high-P(normal) regions overwritten to neutral.
     """
-    # R default is reassignCNVs=TRUE (``inferCNV_BayesNet.R::removeCNV`` reassign
-    # branch), but the Python Gibbs port at ``pyinfercnv/bayesnet/gibbs.py:186-190``
-    # only implements the removeCNV-only branch. ``InferCNVConfig.reassignCNVs``
-    # currently defaults to True for R alignment, so without this guard the kwarg
-    # is silently dropped (it is never forwarded into ``run_bayesnet_gibbs``).
-    # Fail loud at the orchestrator boundary instead of letting users get
-    # remove-only behaviour while they think reassign is enabled.
-    if getattr(config, "reassignCNVs", False):
-        raise NotImplementedError(
-            "_step18_bayesnet: config.reassignCNVs=True is not implemented "
-            "(R inferCNV_BayesNet.R::removeCNV reassign branch). Set "
-            "reassignCNVs=False on InferCNVConfig to use the removeCNV-only "
-            "port, or implement the reassign branch in pyinfercnv.bayesnet.gibbs."
-        )
+    # R default is reassignCNVs=TRUE: after removeCNV, retained regions are
+    # reassigned to their posterior-argmax state (inferCNV_BayesNet.R:491-540).
+    # Implemented in filter_high_p_normals(reassign=...).
+    reassign = bool(getattr(config, "reassignCNVs", False))
 
     hmm_type = config.HMM_type
     if hmm_type == "i6":
@@ -162,6 +152,7 @@ def _step18_bayesnet(
         gibbs_result,
         HMM_type=hmm_type,
         BayesMaxPNormal=config.BayesMaxPNormal,
+        reassign=reassign,
     )
 
     return gibbs_result, filtered_states

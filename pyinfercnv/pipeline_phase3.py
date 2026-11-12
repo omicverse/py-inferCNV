@@ -52,9 +52,8 @@ Current behaviour
   persisted from ``gibbs_result['cnv_posterior']`` (``gibbs.py:269-276``).
 * When ``mask_nonDE_genes=True``, runs step 21.
 * When ``denoise=True``, runs step 22.
-* ``config.reassignCNVs=True`` (R default) raises ``NotImplementedError``
-  at the orchestrator boundary; the Python Gibbs port only implements the
-  ``removeCNV``-only branch (``gibbs.py:186-190``).
+* ``config.reassignCNVs=True`` applies posterior-argmax reassignment after
+  removal. Region states, CN values and posterior row identifiers stay aligned.
 
 See ``docs/superpowers/plans/2026-04-24-phase3-start.md`` for the full
 design and ``docs/superpowers/plans/2026-04-25-phase3-wire-fix-execution.md``
@@ -198,11 +197,6 @@ def run_phase3(
 
     Raises
     ------
-    NotImplementedError
-        When ``config.reassignCNVs=True`` (the R default) — the Python
-        Gibbs port only implements the ``removeCNV``-only branch
-        (``gibbs.py:186-190``). Set ``reassignCNVs=False`` on the
-        config until the reassign branch is ported.
     KeyError
         When ``_step18_bayesnet`` returns a result dict that does not
         contain the canonical ``cnv_posterior`` key — surfaces a
@@ -264,6 +258,12 @@ def run_phase3(
         # The canonical key is ``cnv_posterior`` (see ``gibbs.py:269-276``);
         # ``theta_mean`` is only a local variable inside the sampler. Fail
         # loudly on contract drift instead of silently leaving the field None.
+        # Persist the step-19 filtered state matrix (R keeps it in
+        # hmm.infercnv_obj@expr.data and feeds steps 20-22). 0.2.0 only
+        # passed it to step 20 in-process; scripts had to monkey-patch
+        # _step18_bayesnet to recover it.
+        result.hmm_states_filtered = filtered_states
+
         try:
             result.bayes_posterior = gibbs_result["cnv_posterior"]
         except (KeyError, TypeError) as exc:
@@ -276,6 +276,15 @@ def run_phase3(
                 "run_phase3 expected _step18_bayesnet() to return "
                 f"gibbs_result['cnv_posterior']; got {got}"
             ) from exc
+
+        # Keep the full posterior array; export its row mapping before filtering.
+        # A malformed table must fail rather than silently retain stale CN values.
+        from pyinfercnv.bayesnet.filter_high_p_normals import summarize_bayes_regions
+        result.cnv_regions, result.posterior_p_normal = summarize_bayes_regions(
+            result.cnv_regions, result.bayes_posterior,
+            HMM_type=config.HMM_type, BayesMaxPNormal=config.BayesMaxPNormal,
+            reassign=bool(config.reassignCNVs),
+        )
 
     # Step 20: state→CN-ratio proxy matrix. R-faithful: runs whenever HMM
     # states exist, regardless of Bayes/mask/denoise (``inferCNV_ops.R:1463-1499``).

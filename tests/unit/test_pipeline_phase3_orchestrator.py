@@ -19,6 +19,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
+from anndata import AnnData
 
 from pyinfercnv.config import InferCNVConfig
 from pyinfercnv.pipeline_phase3 import run_phase3
@@ -51,6 +53,7 @@ def _minimal_phase2_result(
                 "subcluster": np.array([0], dtype=np.int32),
                 "bin_start": [0],
                 "bin_end": [n_bins - 1],
+                "state": [raw_state_idx],
             }
         ),
         hspike_calibration=SimpleNamespace(
@@ -69,6 +72,7 @@ def test_run_phase3_persists_cnv_posterior_and_uses_filtered_states(monkeypatch)
     cfg = InferCNVConfig(BayesMaxPNormal=0.5, HMM_type="i6", reassignCNVs=False)
 
     cnv_posterior = np.zeros((1, 6), dtype=np.float64)
+    cnv_posterior[0, 2] = 1.0
     filtered_states = np.full(result.hmm_states.shape, fill_value=2, dtype=np.int8)
 
     # Sanity: fake matches the real gibbs.py:269-276 / filter_high_p_normals.py contract.
@@ -100,3 +104,37 @@ def test_run_phase3_persists_cnv_posterior_and_uses_filtered_states(monkeypatch)
     assert out.hmm_proxy_matrix.shape == result.hmm_states.shape
     assert out.hmm_proxy_matrix.dtype == np.float64
     np.testing.assert_allclose(out.hmm_proxy_matrix, 1.0)
+    assert out.hmm_states_filtered is filtered_states
+    assert out.cnv_regions.empty
+    assert out.posterior_p_normal.posterior_row.tolist() == [0]
+    assert out.posterior_p_normal.removed_by_pnormal.tolist() == [True]
+
+
+@pytest.mark.parametrize("reassign", [False, True])
+def test_bayes_reassignment_matches_export_and_anndata(monkeypatch, reassign):
+    result = _minimal_phase2_result(raw_state_idx=5)
+    posterior = np.array([[0., 0., 0.2, 0., 0.7, 0.1]])
+
+    def fake_gibbs(**kwargs):
+        return {"cnv_posterior": posterior,
+                "region_cell_idx": [np.arange(5)],
+                "region_gene_idx": [np.arange(8)]}
+
+    # Keep the real step18 wrapper and step19 filter in the call path.
+    monkeypatch.setattr("pyinfercnv.bayesnet.run_bayesnet_gibbs", fake_gibbs)
+    cfg = InferCNVConfig(HMM_type="i6", BayesMaxPNormal=0.5, reassignCNVs=reassign)
+    out = run_phase3(result, config=cfg)
+    expected_state = 4 if reassign else 5
+    expected_cn = 2.0 if reassign else 3.0
+    assert np.all(out.hmm_states == 5)
+    assert np.all(out.hmm_states_filtered == expected_state)
+    assert np.all(out.hmm_proxy_matrix == expected_cn)
+    assert out.cnv_regions.state.tolist() == [expected_state]
+    assert out.cnv_regions.cn.tolist() == [expected_cn]
+    assert out.cnv_regions.posterior_row.tolist() == [0]
+    np.testing.assert_array_equal(out.bayes_posterior, posterior)
+
+    adata = AnnData(np.zeros((5, 8)))
+    out.write_to_anndata(adata)
+    np.testing.assert_array_equal(adata.obsm["X_cnv_hmm_states_filtered"],
+                                  out.hmm_states_filtered)

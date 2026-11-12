@@ -1,118 +1,28 @@
-"""Hidden spike-in (hspike) calibration of i6 HMM emission parameters.
+"""Hidden spike-in calibration of i6 emission means and subcluster SD trends.
 
-R-parity source map
--------------------
-This module mirrors four R files in ``infercnv/infercnv-master/R``:
+The default ``r_compatible`` backend uses a local R MT/Inversion/Rejection
+stream and weighted cubic smoothing splines with R's GCV objective. Inputs
+are all post-filter, depth-normalized cells in R chromosome/start order,
+with float64 precision. Reference and observation groups are sorted by name.
+The pipeline supplies that order; direct callers must provide it explicitly.
 
-    inferCNV_hidden_spike.R
-        ``.build_and_add_hspike`` (lines 3-165)     -> :func:`_build_hspike_counts`
-        ``.get_hspike_chr_info`` (lines 170-215)    -> :data:`HSPIKE_CHR_INFO`
-    inferCNV_meanVarSim.R
-        ``.get_simulated_cell_matrix_using_meanvar_trend`` (lines 1-19)
-                                                    -> :func:`_simulate_meanvar_counts`
-        ``.get_mean_var_given_matrix`` (lines 189-211) -> :func:`_fit_meanvar_spline` (gene-level)
-        ``.get_mean_vs_p0_table`` + ``.apply_dropout`` -> :func:`_apply_dropout`
-    inferCNV_HMM.R
-        ``get_spike_dists`` (lines 15-31) + ``.get_gene_expr_by_cnv`` (lines 45-68)
-                                                    -> :func:`_gene_expr_mean_sd_by_cnv`
-        ``get_hspike_cnv_mean_sd_trend_by_num_cells_fit`` (lines 154-212)
-                                                    -> :func:`_fit_cnv_sd_vs_num_cells_trend`
+Simulation mirrors inferCNV_hidden_spike.R and inferCNV_meanVarSim.R:
+normal draws run cell-first, dropout draws gene-first (including zeros).
+The synthetic genome is replayed through log2, reference subtraction,
+clipping, smoothing, centering, second subtraction, inverse log2 and optional
+outlier pruning, using the same configuration as the real matrix.
 
-Algorithm overview
-------------------
-R's i6 HMM needs, per CNV state ``s in {0.01, 0.5, 1, 1.5, 2, 3}``:
-    * a mean ``mu_s`` in linear-FC space
-    * a per-``num_cells`` sd function ``sigma_s(n)``
+inferCNV_HMM.R pools observation values by CN level, then fits log(SD)
+against log(cell count). Its rowMeans-across-rounds convention and n=1 RNG
+consumption are preserved. The local stream continues from hspike simulation;
+R's full run consumes additional random numbers during tree construction,
+so the final trend need not be bit-identical to a historical R run. GCV
+optimizer rounding can also cause rare simulated-count differences.
 
-so that :class:`pyinfercnv.hmm.i6.predict_i6` can be called on rowMeans
-across a tumour subcluster with sd scaled by ``num_cells`` (R
-``.get_state_emission_params`` in ``inferCNV_HMM.R:586-614``).
-
-R obtains ``mu_s`` and ``sigma_s(n)`` by:
-
-    1.  Building a synthetic infercnv object (``.hspike``) over a *fake*
-        genome with 11 chromosomes (``HSPIKE_CHR_INFO``), alternating
-        neutral blocks (cnv=1) with blocks at each target CN level; each
-        block carries ``num_genes_per_chr`` fake genes.
-    2.  For every reference-group gene-means profile ``gene_means`` (taken
-        from the real normalized reference counts), simulating 100 normal
-        cells + 100 spiked-tumour cells via ``sim_method in {meanvar,
-        simple, splatter}``. Only ``'meanvar'`` is ported for Phase 2; the
-        other two raise :class:`NotImplementedError` (``sim_method='simple'``
-        and ``'splatter'`` require 500+ lines of additional R; deferred).
-    3.  Running the full Phase 1 inferCNV pipeline (filter → normalize →
-        log2 → subtract_ref → clip → smooth → center → subtract_ref₂ →
-        ``invert_log2`` and outlier pruning) on the hspike counts. The
-        result ``hspike_matrix`` has one row per simulated cell and one
-        column per fake gene, so each hspike chromosome's contiguous gene
-        columns carry the known CNV label of that block.
-    4.  Computing ``mu_s = mean(hspike_matrix[chr == s_name])`` and
-        ``sigma_s = sd(...)`` across the fake-chr gene block (per-cell
-        sample-level trend fitted separately).
-    5.  Fitting ``lm(log(sigma_s(n)) ~ log(n))`` for ``n in 1..100``:
-        for each n, resample n cells (with replacement from the block's
-        expression values), compute their mean, repeat 100 rounds, take
-        the sd over rounds — that's ``sigma_s(n)``.
-
-The output of :func:`calibrate_i6_emission` is a frozen
-:class:`HspikeCalibration` encapsulating ``mus``, ``sigmas`` (for n=1),
-``sd_log_slope`` and ``sd_log_intercept`` (the lm fit), plus the fake-chr
-CNV grid for provenance.
-
-Matrix layout
--------------
-* ``ref_counts_raw`` inputs are ``(n_ref_cells, n_genes_post_filter)`` dense
-  float32, in post-Phase-1-filter gene order (from
-  :attr:`InferCNVResult.ref_counts_raw`).
-* ``ref_groups_local`` keys into rows of ``ref_counts_raw`` (0-indexed).
-  Callers must remap from global cell indices before invoking this module.
-* Simulated hspike matrix is ``(n_hspike_cells, n_hspike_genes)`` float32,
-  not sparse — hspike is always small (~2 * n_groups * num_cells_per_state
-  cells × 11 * num_genes_per_chr genes ≈ 200 × 4400 for defaults).
-* Internal Phase 1 replay on hspike produces a dense float32
-  ``(n_hspike_cells, n_hspike_genes)`` in linear-FC space.
-
-Tier classification
--------------------
-Per ``docs/superpowers/specs/2026-04-21-pyinfercnv-master-design.md`` §5.2,
-hspike calibration is **tier-3.5 empirical** — the NB-with-dropout
-simulation + smooth.spline mean-var fit depart from R on numerical trivia
-(RNG streams, spline knots), so bit-exact parity is not targeted. Acceptance
-metric: each ``mu_s`` within 10% of R's value on the shared fixture, and
-subcluster Viterbi labelling ARI ≥ 0.85 against R on the empirical floor.
-
-G1 patches in scope
--------------------
-* **P3** — :func:`calibrate_i6_emission` must be registered in
-  ``pyinfercnv.hmm.__init__.__all__``.
-* **P11** — optional ``profile`` dict parameter receives psutil timings per
-  block (simulate / Phase1-replay / mean-sd / trend-lm).
-
-What this module does NOT do
-----------------------------
-* No call to :func:`pyinfercnv.pipeline.infercnv`. Replay uses the lower-level
-  step functions directly (``filter_low_expression_genes``, ``normalize_by_seq_depth``,
-  ``log2_plus1``, ``subtract_reference``, ``apply_max_centered_threshold``,
-  ``smooth_pyramidinal``, ``center_cells``) to avoid re-extracting from an
-  AnnData and to keep the fake-chr layout under our direct control.
-* No handling of ``sim_method in {'simple', 'splatter'}``. NotImplementedError.
-* No persistence into AnnData. The caller (Phase 2 pipeline) threads the
-  returned :class:`HspikeCalibration` into :func:`pyinfercnv.hmm.i6.predict_i6`.
-
-No new numba kernels
---------------------
-All compiled hot loops in Phase 2 stay inside
-:mod:`pyinfercnv.kernels.hmm_viterbi_numba`. The hspike body relies on
-NumPy vectorization + SciPy primitives (``scipy.interpolate``,
-``scipy.special``) only; no ``@njit`` is added here or in
-:mod:`pyinfercnv.pipeline_phase2`. (G2 Q4 documentation.)
-
-Current parity notes
---------------------
-The implementation intentionally keeps the stochastic hspike calibration
-deterministic. Its default ``random_state=42`` mirrors the local R reference
-fixture's ``set.seed(42)``. Python's PCG64 and R's Mersenne-Twister streams are
-not bit-identical, so hspike remains empirical rather than bit-exact.
+``numpy_legacy`` retains the prior PCG64, unweighted approximate spline and
+sampling order for historical reconstruction. Neither implementation turns
+CNV agreement into verified malignant-cell accuracy. The four-case numerical
+validation is recorded in results/03_malignancy/07_hmm_calibration_20261112/.
 """
 from __future__ import annotations
 
@@ -124,6 +34,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import UnivariateSpline
 from scipy.special import expit
+from .r_compat import RCompatibleRNG, RSmoothingSpline, fit_r_smoothing_spline
 
 if TYPE_CHECKING:  # pragma: no cover
     from pyinfercnv.config import InferCNVConfig
@@ -203,7 +114,7 @@ class HspikeCalibration:
         ``[0.01, 0.5, 1.0, 1.5, 2.0, 3.0]``. Included explicitly so the
         caller can label outputs without hard-coding the grid.
     state_mus
-        Shape (6,) float64 — per-state mean in log2-FC space, as read from
+        Shape (6,) float64 — per-state mean in linear-FC space, as read from
         the post-Phase-1 hspike matrix restricted to that state's fake-chr
         block. Aligns with :data:`pyinfercnv.hmm.i6.I6_DEFAULT_MUS` in shape
         and semantics but with R-calibrated values.
@@ -213,9 +124,9 @@ class HspikeCalibration:
         HMM calls, use :meth:`sigmas_for_num_cells` to apply the trend fit.
     sd_log_slope, sd_log_intercept
         Shape (6,) float64 each — per-state lm coefficients for
-        ``log(sigma(n)) ~ a * log(n) + b``. Slope is typically near ``-0.5``
-        (sd of a sample mean scales as ``1/sqrt(n)``); intercept equals
-        ``log(state_sigmas)`` in the limit.
+        ``log(sigma(n)) ~ a * log(n) + b``. The preserved R rowMeans
+        convention averages across simulation rounds, so slopes are near
+        zero and the intercept is not log(state_sigmas); see the fit below.
     hspike_matrix
         Optional, shape (n_hspike_cells, n_hspike_genes) float32 — the full
         post-Phase-1 hspike matrix retained for diagnostics/G3 verification.
@@ -344,9 +255,10 @@ def calibrate_i6_emission(
     Parameters
     ----------
     expr_data_normalized
-        Shape (n_all_cells, n_genes_post_filter) dense float32 — post-filter,
-        post-normalize, pre-log2 matrix **for ALL cells** (observation +
-        reference). Consumed from :attr:`InferCNVResult.cpm_matrix_f32`.
+        Shape (n_all_cells, n_genes_post_filter), post-normalize and pre-log2,
+        for all observation and reference cells. The R-compatible backend
+        expects float64 values in R chromosome/start order. Consumed from
+        the historical field :attr:`InferCNVResult.cpm_matrix_f32`.
     reference_groups
         Keys: reference group names. Values: integer arrays of **global**
         cell-row indices into ``expr_data_normalized`` (NOT ref-local
@@ -364,8 +276,8 @@ def calibrate_i6_emission(
     config
         Phase 1 :class:`InferCNVConfig`. Used to re-run the Phase 1 pipeline
         on simulated hspike counts. ``None`` uses defaults. Only the
-        preprocess/smooth/center/subtract/threshold fields are honoured;
-        HMM fields are ignored.
+        preprocess/smooth/center/subtract/threshold fields and
+        ``hspike_calibration_backend`` are honoured.
     sim_method
         Only ``"meanvar"`` is implemented in Phase 2; other values raise
         :class:`NotImplementedError`.
@@ -397,8 +309,9 @@ def calibrate_i6_emission(
         ``False`` per G2 Q5: production runs allocate only the calibration
         vectors; set ``True`` for debugging / G3 parity inspection.
     random_state
-        Passed through to :class:`numpy.random.default_rng`. R uses an
-        implicit ``set.seed(...)`` — we make it explicit and deterministic.
+        Seed for an isolated R-compatible MT stream (default backend), or
+        PCG64 (legacy backend). ``None`` draws a nondeterministic seed.
+        Reproducible production runs must provide an integer seed.
     profile
         Optional dict mutated in place with G1-P11 psutil timings under
         keys ``hspike_sim``, ``hspike_phase1_replay``, ``hspike_get_dists``,
@@ -433,7 +346,12 @@ def calibrate_i6_emission(
             "inferCNV_simple_sim.R / SplatterScrape.R (~500 lines) and are deferred."
         )
 
-    expr_full = np.asarray(expr_data_normalized, dtype=np.float32)
+    from pyinfercnv.config import InferCNVConfig as _Config
+    cfg = config if config is not None else _Config()
+    backend = cfg.hspike_calibration_backend
+    if backend not in ("r_compatible", "numpy_legacy"):
+        raise ValueError(f"Unknown hspike_calibration_backend: {backend!r}")
+    expr_full = np.asarray(expr_data_normalized, dtype=np.float64 if backend == "r_compatible" else np.float32)
     if expr_full.size == 0 or expr_full.shape[0] == 0:
         raise ValueError(
             "expr_data_normalized is empty (0 cells). Cannot calibrate hspike emission."
@@ -464,6 +382,9 @@ def calibrate_i6_emission(
 
     ref_groups_in = _copy_groups(reference_groups)
     obs_groups_in = _copy_groups(observation_groups)
+    if backend == "r_compatible":
+        ref_groups_in = dict(sorted(ref_groups_in.items()))
+        obs_groups_in = dict(sorted(obs_groups_in.items()))
 
     # R's .build_and_add_hspike branch (inferCNV_hidden_spike.R:9-26):
     #   has_reference_cells(obj): use reference_grouped_cell_indices as normals
@@ -502,10 +423,7 @@ def calibrate_i6_emission(
         # Degenerate (only synthesised normals from ref-less): fit on them
         fit_groups = dict(normal_cells_idx_lists)
 
-    from pyinfercnv.config import InferCNVConfig as _Config
-    cfg = config if config is not None else _Config()
-
-    rng = np.random.default_rng(random_state)
+    rng = RCompatibleRNG(random_state) if backend == "r_compatible" else np.random.default_rng(random_state)
 
     # ------------------------------------------------------------------ #
     # Stage 1: build hspike counts (D.1 + D.2 + D.4)                      #
@@ -604,7 +522,7 @@ def _build_hspike_counts(
     num_genes_per_chr: int,
     sim_method: Literal["meanvar", "simple", "splatter"],
     include_dropout: bool,
-    rng: np.random.Generator,
+    rng: np.random.Generator | RCompatibleRNG,
 ) -> tuple[NDArray[np.float32], NDArray[np.object_], dict[str, NDArray[np.intp]], dict[str, NDArray[np.intp]]]:
     """Build the synthetic hspike counts matrix mirroring R ``.build_and_add_hspike``.
 
@@ -621,7 +539,8 @@ def _build_hspike_counts(
     Returns
     -------
     counts
-        Shape (n_hspike_cells, n_hspike_genes) float32, already normalized.
+        Shape (n_hspike_cells, n_hspike_genes), already normalized; float64
+        for the R-compatible backend and float32 for the legacy backend.
     gene_chr_labels
         Shape (n_hspike_genes,) object dtype — per-gene fake chromosome name.
     reference_indices, observation_indices
@@ -660,11 +579,12 @@ def _build_hspike_counts(
     genes_means_use_idx = rng.choice(n_real_genes, size=n_fake_genes, replace=True)
 
     # D.2 — fit mean-var spline + dropout on the pooled obs+ref groups
-    spline_knots = _fit_meanvar_spline(expr_data_normalized, fit_groups)
-    dropout_logistic_params: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
+    spline_method = "r_compatible" if isinstance(rng, RCompatibleRNG) else "numpy_legacy"
+    spline_knots = _fit_meanvar_spline(expr_data_normalized, fit_groups, method=spline_method)
+    dropout_logistic_params: RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
     if include_dropout:
         dropout_logistic_params = _fit_dropout_logistic_params(
-            expr_data_normalized, fit_groups
+            expr_data_normalized, fit_groups, method=spline_method
         )
 
     # Build cells: per normal group, normals first then spiked-tumour (R cbind order)
@@ -728,7 +648,7 @@ def _build_hspike_counts(
             from pyinfercnv.preprocess import normalize_by_seq_depth  # late import
             counts = normalize_by_seq_depth(
                 counts, normalize_factor=target_libsize
-            ).astype(np.float32)
+            ).astype(np.float64 if isinstance(rng, RCompatibleRNG) else np.float32)
 
     return counts, gene_chr_labels, reference_indices, observation_indices
 
@@ -736,10 +656,11 @@ def _build_hspike_counts(
 def _fit_dropout_logistic_params(
     counts: NDArray[np.float32],
     cell_groupings: Mapping[str, NDArray[np.intp]] | None = None,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    *, method: str = "r_compatible",
+) -> RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Fit dropout probability vs log(mean) from the reference matrix.
 
-    Returns ``(log_m_grid, dropout_p_grid)`` for ``np.interp`` lookup.
+    Returns a callable R-compatible spline, or legacy interpolation grids.
     R reference: ``inferCNV_meanVarSim.R`` ``.get_mean_vs_p0_table`` +
     ``.get_logistic_params``.
     """
@@ -766,6 +687,8 @@ def _fit_dropout_logistic_params(
 
     log_m = np.log(m[positive])
     p0 = p0[positive]
+    if method == "r_compatible":
+        return fit_r_smoothing_spline(log_m, p0)
     order = np.argsort(log_m)
     log_m_sorted = log_m[order]
     p0_sorted = np.clip(p0[order], 0.0, 1.0)
@@ -790,14 +713,12 @@ def _fit_dropout_logistic_params(
 def _fit_meanvar_spline(
     counts: NDArray[np.float32],
     cell_groupings: Mapping[str, NDArray[np.intp]] | None,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    *, method: str = "r_compatible",
+) -> RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Fit R ``smooth.spline(log(v+1) ~ log(m+1))`` gene-wise mean-variance trend.
 
-    Returns ``(knots_log_m, knots_log_v)`` — the spline evaluated on a dense
-    grid; :func:`_simulate_meanvar_counts` uses ``np.interp`` against it.
-    ``scipy.interpolate.UnivariateSpline`` with R-matching smoothing
-    parameter is the implementation target; the tuple signature avoids
-    leaking a live spline object across calls.
+    Returns a callable weighted GCV spline by default. The legacy backend
+    returns grid values from a fixed-residual-budget UnivariateSpline.
 
     R reference: ``inferCNV_meanVarSim.R:30`` (``smooth.spline``) +
     ``inferCNV_meanVarSim.R:189-211`` (``.get_mean_var_given_matrix``).
@@ -829,6 +750,8 @@ def _fit_meanvar_spline(
 
     log_m = np.log(m + 1.0)
     log_v = np.log(v + 1.0)
+    if method == "r_compatible":
+        return fit_r_smoothing_spline(log_m, log_v)
 
     order = np.argsort(log_m)
     log_m_sorted = log_m[order]
@@ -840,7 +763,7 @@ def _fit_meanvar_spline(
         # Degenerate: return trivial flat spline
         return x_u.astype(np.float64), y_u.astype(np.float64)
 
-    # scipy UnivariateSpline mirrors R smooth.spline behaviour (G2 Q3)
+    # Approximate fit: s=len(x_u) is not R smooth.spline GCV.
     try:
         spl = UnivariateSpline(x_u, y_u, k=min(3, len(x_u) - 1), s=len(x_u))
         log_m_grid = np.linspace(x_u[0], x_u[-1], max(200, len(x_u)))
@@ -854,10 +777,10 @@ def _fit_meanvar_spline(
 
 def _simulate_meanvar_counts(
     gene_means: NDArray[np.float64],
-    spline_knots: tuple[NDArray[np.float64], NDArray[np.float64]],
+    spline_knots: RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]],
     num_cells: int,
-    dropout_logistic_params: tuple[NDArray[np.float64], NDArray[np.float64]] | None,
-    rng: np.random.Generator,
+    dropout_logistic_params: RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]] | None,
+    rng: np.random.Generator | RCompatibleRNG,
 ) -> NDArray[np.float32]:
     """Sample ``(num_cells, n_genes)`` counts from the mean-var trend.
 
@@ -869,24 +792,33 @@ def _simulate_meanvar_counts(
     Returns
     -------
     simulated
-        Shape ``(num_cells, len(gene_means))`` float32.
+        Shape ``(num_cells, len(gene_means))``; float64 for the R-compatible
+        backend and float32 for the legacy backend.
     """
-    log_m_grid, log_v_grid = spline_knots
     gene_means_f = np.asarray(gene_means, dtype=np.float64)
     n_genes = gene_means_f.shape[0]
 
     # Vectorized: predict log_var for all genes at once
     log_m_genes = np.log(gene_means_f + 1.0)
-    pred_log_v = np.interp(log_m_genes, log_m_grid, log_v_grid)
+    pred_log_v = (spline_knots(log_m_genes) if isinstance(spline_knots, RSmoothingSpline)
+                  else np.interp(log_m_genes, *spline_knots))
     gene_var = np.maximum(np.exp(pred_log_v) - 1.0, 0.0)  # (n_genes,)
     gene_sd = np.sqrt(gene_var)  # (n_genes,)
 
     # Draw normal random matrix in one shot
     mu = gene_means_f[None, :]   # (1, n_genes)
     sd = gene_sd[None, :]        # (1, n_genes)
-    x = rng.normal(loc=mu, scale=sd, size=(num_cells, n_genes))
+    if isinstance(rng, RCompatibleRNG):
+        # R loops over cells, then genes, calling rnorm(1) at each entry.
+        # Its subsequent dropout loop has the opposite (gene-first) order.
+        active = gene_sd > 0
+        z = np.zeros((num_cells, n_genes))
+        z[:, active] = rng.standard_normal((num_cells, int(active.sum())))
+        x = mu + sd * z
+    else:
+        x = rng.normal(loc=mu, scale=sd, size=(num_cells, n_genes))
     x = np.maximum(x, 0.0)
-    x = np.round(x).astype(np.float32)
+    x = np.round(x).astype(np.float64 if isinstance(rng, RCompatibleRNG) else np.float32)
 
     if dropout_logistic_params is not None:
         x = _apply_dropout(x, dropout_logistic_params, rng)
@@ -896,16 +828,16 @@ def _simulate_meanvar_counts(
 
 def _apply_dropout(
     counts: NDArray[np.float32],
-    dropout_logistic_params: tuple[NDArray[np.float64], NDArray[np.float64]],
-    rng: np.random.Generator,
+    dropout_logistic_params: RSmoothingSpline | tuple[NDArray[np.float64], NDArray[np.float64]],
+    rng: np.random.Generator | RCompatibleRNG,
 ) -> NDArray[np.float32]:
     """Logistic-dropout post-processing, mirror of R ``.apply_dropout``.
 
     R reference: ``inferCNV_meanVarSim.R:122-161``. The ``padj`` adjustment
     line 137 must be preserved verbatim for R-parity.
     """
-    log_m_grid, dropout_p_grid = dropout_logistic_params
-    counts_f = np.asarray(counts, dtype=np.float32)
+    native_r = isinstance(rng, RCompatibleRNG)
+    counts_f = np.asarray(counts, dtype=np.float64 if native_r else np.float32)
     # R's apply(counts.matrix, 1, ...) is per-row of the R (genes x cells) matrix
     # = per column of our Python (cells x genes) matrix
     # So x = one gene's values across all cells
@@ -919,7 +851,9 @@ def _apply_dropout(
 
     # Lookup dropout probability
     log_mean_per_gene = np.log(np.maximum(mean_per_gene, 1e-15))
-    dropout_prob = np.interp(log_mean_per_gene, log_m_grid, dropout_p_grid)
+    dropout_prob = (dropout_logistic_params(log_mean_per_gene)
+                    if isinstance(dropout_logistic_params, RSmoothingSpline)
+                    else np.interp(log_mean_per_gene, *dropout_logistic_params))
 
     # R padj formula (line 137, preserved verbatim):
     # padj = ( (dropout_prob * ntotal) - nzeros ) / nremaining
@@ -927,10 +861,10 @@ def _apply_dropout(
     padj = (dropout_prob * ntotal - nzeros_per_gene) / np.maximum(nremaining_per_gene, 1.0)
     padj = np.maximum(padj, 0.0)  # (n_genes,)
 
-    # Apply per-cell coin flip, only on non-zero entries
-    u = rng.random(counts_f.shape)  # (n_cells, n_genes)
-    drop_mask = (u < padj[None, :]) & (counts_f != 0)
-    out = np.where(drop_mask, 0.0, counts_f).astype(np.float32)
+    # Draw for every entry; zero entries remain zero after the coin flip.
+    u = rng.random(counts_f.T.shape).T if native_r else rng.random(counts_f.shape)
+    drop_mask = ((u <= padj[None, :]) if native_r else (u < padj[None, :])) & (counts_f != 0)
+    out = np.where(drop_mask, 0.0, counts_f).astype(counts_f.dtype)
     return out
 
 
@@ -965,7 +899,7 @@ def _run_phase1_replay_on_hspike(
         5. ``center_cells`` (median)
         6. ``subtract_reference`` (pass 2)
         7. ``invert_log2`` — ``2 ** x``  (R step 14)
-        8. ``prune_outliers`` in linear FC  (R step 16)
+        8. ``prune_outliers`` in linear FC only when enabled (R step 16)
 
     Returns
     -------
@@ -1023,13 +957,16 @@ def _run_phase1_replay_on_hspike(
     # --- Step 14 (mirror): invert_log2 — linear FC ---
     X = invert_log2(X)
 
-    # --- Step 16 (mirror): prune_outliers in linear FC ---
-    X = prune_outliers(
-        X,
-        method=config.outlier_method_bound,
-        lower_bound=config.outlier_lower_bound,
-        upper_bound=config.outlier_upper_bound,
-    )
+    # R run() gates remove_outliers_norm, including its hspike mirror,
+    # behind prune_outliers. Clipping only hspike would change calibration
+    # while leaving the real expression matrix on a different scale.
+    if config.prune_outliers:
+        X = prune_outliers(
+            X,
+            method=config.outlier_method_bound,
+            lower_bound=config.outlier_lower_bound,
+            upper_bound=config.outlier_upper_bound,
+        )
 
     return X.astype(np.float32), gene_chr_labels
 
@@ -1090,9 +1027,9 @@ def _fit_cnv_sd_vs_num_cells_trend(
     *,
     num_rounds: int,
     max_num_cells: int,
-    rng: np.random.Generator,
+    rng: np.random.Generator | RCompatibleRNG,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Fit ``lm(log(sigma(n)) ~ log(n))`` per CNV state — **bit-for-bit R parity**.
+    """Fit ``lm(log(sigma(n)) ~ log(n))`` using the R aggregation convention.
 
     Mirror of R ``get_hspike_cnv_mean_sd_trend_by_num_cells_fit``
     (``inferCNV_HMM.R:154-212``).
@@ -1149,7 +1086,10 @@ def _fit_cnv_sd_vs_num_cells_trend(
     slopes = np.empty(6, dtype=np.float64)
     intercepts = np.empty(6, dtype=np.float64)
 
-    for i, level in enumerate(I6_CNV_LEVELS_CALIBRATED):
+    # R builds its list in fake-chromosome order: neutral is sampled first.
+    levels = list(cnv_to_vals) if isinstance(rng, RCompatibleRNG) else I6_CNV_LEVELS_CALIBRATED
+    for level in levels:
+        i = int(np.flatnonzero(I6_CNV_LEVELS_CALIBRATED == level)[0])
         expr_vals = cnv_to_vals.get(float(level), None)
         if expr_vals is None or expr_vals.shape[0] < 2:
             slopes[i] = 0.0
@@ -1163,10 +1103,14 @@ def _fit_cnv_sd_vs_num_cells_trend(
                 # length-nrounds vector; `is(vals)` is not matrix; the
                 # else branch computes `mean(vals)` (scalar), and
                 # `sd(scalar) = NA`. Mirror that with NaN.
+                if isinstance(rng, RCompatibleRNG):
+                    rng.choice(expr_vals, size=num_rounds, replace=True)
                 sds[j] = np.nan
                 continue
             # Draw (ncells, num_rounds) — R `replicate` column-major
-            samples = rng.choice(expr_vals, size=(ncells, num_rounds), replace=True)
+            samples = (rng.choice(expr_vals, size=(num_rounds, ncells), replace=True).T
+                       if isinstance(rng, RCompatibleRNG)
+                       else rng.choice(expr_vals, size=(ncells, num_rounds), replace=True))
             # R-parity "rowMeans" on the (ncells, nrounds) matrix:
             # mean across the nrounds columns → length-ncells vector.
             # This is R's inferCNV_HMM.R:166 behaviour (not a CLT-correct

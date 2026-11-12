@@ -49,7 +49,9 @@ class InferCNVResult:
     -------------------------------------
     cpm_matrix_f32
         Post-step2 gene-filter, post-step3 normalize-by-seq-depth matrix
-        (ALL cells incl. observation and reference; float32; pre-log2).
+        (ALL cells incl. observation and reference; pre-log2). Despite the
+        historical field name, the R-compatible backend uses float64 in
+        R chromosome/start order; legacy uses float32 in feature-file order.
         Populated by :func:`pyinfercnv.pipeline.infercnv` right after
         ``normalize_by_seq_depth``. Consumed by
         :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission` as the input
@@ -76,10 +78,14 @@ class InferCNVResult:
     hmm_states_i3
         3-state Viterbi output, shape (n_cells, n_bins). int8.
     cnv_regions
-        Per-region BED-like DataFrame with columns
-        [cell_group, chromosome, start, end, state, posterior_p_normal].
+        Retained regions, with inclusive bin_start/bin_end gene indices.
+        State is zero-based; state_r is the explicit one-based R encoding.
+        After Bayes filtering, cn matches state and posterior_row indexes
+        the unfiltered bayes_posterior array. Region IDs are run-local.
     posterior_p_normal
-        Bayes filter output per (cell_group, region). DataFrame.
+        All pre-filter regions, with region_id, posterior_row, state_step17,
+        final state/CN, p_normal, p_state_0..K-1 and removed_by_pnormal.
+        This table retains the mapping for both kept and removed regions.
     profile
         Per-block wall-clock and RSS (psutil) captured during pipeline run
         when `debug=True`. Free-form dict.
@@ -103,10 +109,28 @@ class InferCNVResult:
     # called (``inferCNV_ops.R:586-595``). Transient, like ``cnv_matrix_f64``.
     cpm_matrix_f32: np.ndarray | None = None
 
+    # R-parity random-trees inputs (transient, nulled after Phase 2):
+    # ``step04_matrix_f64``: log2 matrix after filtering/normalization but
+    #   BEFORE reference subtraction — equivalent to R's step-04
+    #   ``infercnv_obj@expr.data``.
+    # ``tree_input_f64``: matrix actually fed to random_trees, i.e.
+    #   ``subtract_ref_expr_from_obs(step04, inv_log=True)`` reordered to
+    #   R's chromosome-lexicographic gene order (equivalent to R's
+    #   ``define_signif_tumor_subclusters_via_random_smooothed_trees``
+    #   input). ``None`` when the legacy ``tree_input_source="cnv_matrix"``
+    #   path is used.
+    step04_matrix_f64: np.ndarray | None = None
+    tree_input_f64: np.ndarray | None = None
+
     # G1 P1 — Phase 2+ schema frozen
     subclusters: np.ndarray | None = None
     hmm_states: np.ndarray | None = None
     hmm_states_i3: np.ndarray | None = None
+    # Post-step-19 (Bayes filterHighPNormals) HMM state matrix. R keeps this
+    # in ``hmm.infercnv_obj@expr.data`` and feeds it to steps 20-22; the
+    # 0.2.0 port discarded it after step 20 (scripts had to spy on
+    # ``_step18_bayesnet`` to recover it). Persisted here instead.
+    hmm_states_filtered: np.ndarray | None = None
     cnv_regions: pd.DataFrame | None = None
     posterior_p_normal: pd.DataFrame | None = None
 
@@ -224,3 +248,5 @@ class InferCNVResult:
             adata.obsm[f"X_{key_added}_hmm_states"] = self.hmm_states
         if self.hmm_states_i3 is not None:
             adata.obsm[f"X_{key_added}_hmm_states_i3"] = self.hmm_states_i3
+        if self.hmm_states_filtered is not None:
+            adata.obsm[f"X_{key_added}_hmm_states_filtered"] = self.hmm_states_filtered
