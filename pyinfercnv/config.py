@@ -97,6 +97,9 @@ class InferCNVConfig:  # noqa: N801
     # matches R behaviour.
     cluster_by_groups: bool = True
 
+    # Independent random-tree null permutations; 1 keeps serial execution.
+    tree_workers: int = 1
+
     # --- Phase 2 Leiden stability knobs (Track A closeout, default off) ---
     # n_seeds > 1 runs Leiden N times with seeds (random_state,
     # random_state+1, …) and returns the highest-CPM partition (``rbest``).
@@ -129,6 +132,8 @@ class InferCNVConfig:  # noqa: N801
     random_state: int = 42
 
     def validate(self) -> None:
+        if self.tree_workers < 1:
+            raise ValueError("tree_workers must be >= 1")
         if self.cutoff < 0:
             raise ValueError(f"cutoff must be >= 0, got {self.cutoff}")
         if self.min_cells_per_gene < 0:

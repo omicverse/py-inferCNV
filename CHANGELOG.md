@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Opt-in `tree_workers` on `InferCNVConfig` and `random_tree_subcluster`,
+  forwarded by the Phase 2 pipeline. The default remains serial.
+- Spawn-based workers with a pool reused through recursive partitions and
+  a shared input matrix per null fit. Cleanup runs on success and failure.
+- Serial PCG64 state snapshots and ordered result collection, preserving
+  null distributions, recursive labels and subsequent RNG draws, including
+  cached uint32 state.
+- Synthetic tests for dtype/worker-count equivalence, recursive and capped
+  trees, config forwarding and shared-memory cleanup.
+
+The existing random-tree smoother/subsampling defaults and HMM calibration
+are preserved. This change is independent of the R-parity correctness fixes.
+No new dependency or package-version change is included.
+
 ## 0.2.0 (2026-04-25) — first stable release
 
 First stable cut. Phase 1 + Phase 2 + Phase 3 are all implemented and

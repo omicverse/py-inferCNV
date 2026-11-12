@@ -20,7 +20,11 @@ This bounds the O(n^2) distance computation inside scipy `linkage`.
 """
 from __future__ import annotations
 
+import copy
+import multiprocessing as mp
 import warnings
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import shared_memory
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -79,6 +83,22 @@ def _permute_columns(X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     return X[perm_idx, col_idx]
 
 
+def _permutation_height(task: tuple) -> float:
+    """Compute one permutation using the serial generator's saved state."""
+    name, shape, dtype, state, window_size, hclust_method = task
+    block = shared_memory.SharedMemory(name=name)
+    try:
+        X = np.ndarray(shape, dtype=np.dtype(dtype), buffer=block.buf)
+        rng = np.random.default_rng()
+        rng.bit_generator.state = state
+        X_perm = _permute_columns(X, rng)
+        X_perm_sc = _smooth_and_center(X_perm, window_size)
+        _, heights = _linkage_heights(X_perm_sc, hclust_method)
+        return float(heights.max()) if heights.size else 0.0
+    finally:
+        block.close()
+
+
 def _parameterize_null(
     X: np.ndarray,
     *,
@@ -86,6 +106,7 @@ def _parameterize_null(
     window_size: int,
     n_rand_iters: int,
     rng: np.random.Generator,
+    executor: ProcessPoolExecutor | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Return (Z_obs, heights_obs, max_height_pval) from the random-trees null.
 
@@ -98,11 +119,36 @@ def _parameterize_null(
     max_obs = float(heights_obs.max()) if heights_obs.size else 0.0
 
     max_rand_heights = np.empty(n_rand_iters, dtype=np.float64)
-    for i in range(n_rand_iters):
-        X_perm = _permute_columns(X, rng)
-        X_perm_sc = _smooth_and_center(X_perm, window_size)
-        _, h_rand = _linkage_heights(X_perm_sc, hclust_method)
-        max_rand_heights[i] = float(h_rand.max()) if h_rand.size else 0.0
+    if executor is None:
+        for i in range(n_rand_iters):
+            X_perm = _permute_columns(X, rng)
+            X_perm_sc = _smooth_and_center(X_perm, window_size)
+            _, h_rand = _linkage_heights(X_perm_sc, hclust_method)
+            max_rand_heights[i] = float(h_rand.max()) if h_rand.size else 0.0
+    else:
+        # Each float64 uniform consumes one PCG64 draw. Save each serial RNG
+        # state, then advance the parent exactly as the original loop does.
+        if not isinstance(rng.bit_generator, np.random.PCG64):
+            raise ValueError("parallel random_trees requires PCG64")
+        X = np.ascontiguousarray(X)
+        block = shared_memory.SharedMemory(create=True, size=X.nbytes)
+        try:
+            np.ndarray(X.shape, dtype=X.dtype, buffer=block.buf)[:] = X
+            tasks = []
+            for _ in range(n_rand_iters):
+                state = copy.deepcopy(rng.bit_generator.state)
+                rng.bit_generator.advance(X.size)
+                # advance() clears the cached uint32; random(float64) does not.
+                advanced = rng.bit_generator.state
+                advanced["has_uint32"] = state["has_uint32"]
+                advanced["uinteger"] = state["uinteger"]
+                rng.bit_generator.state = advanced
+                tasks.append((block.name, X.shape, X.dtype.str, state,
+                              window_size, hclust_method))
+            max_rand_heights[:] = list(executor.map(_permutation_height, tasks))
+        finally:
+            block.close()
+            block.unlink()
 
     if max_obs <= 0.0:
         p_val = 1.0
@@ -129,6 +175,7 @@ def _recursive_partition(
     n_rand_iters: int,
     rng: np.random.Generator,
     recursion_depth: int = 1,
+    executor: ProcessPoolExecutor | None = None,
 ) -> None:
     """In-place fill of `labels_out[cell_indices]` using the random-trees recursion.
 
@@ -149,6 +196,7 @@ def _recursive_partition(
         window_size=window_size,
         n_rand_iters=n_rand_iters,
         rng=rng,
+        executor=executor,
     )
 
     if p_val_obs > tumor_subcluster_pval or heights.size < 2:
@@ -198,6 +246,7 @@ def _recursive_partition(
                 n_rand_iters=n_rand_iters,
                 rng=rng,
                 recursion_depth=recursion_depth + 1,
+                executor=executor,
             )
         else:
             lbl = next_label[0]
@@ -205,7 +254,7 @@ def _recursive_partition(
             labels_out[child_global_idx] = lbl
 
 
-def random_tree_subcluster(
+def _random_tree_subcluster_impl(
     cnv_matrix: np.ndarray,
     *,
     subsample_for_tree: int = 500,
@@ -216,6 +265,7 @@ def random_tree_subcluster(
     min_cluster_size_recurse: int = _DEFAULT_MIN_CLUSTER_SIZE_RECURSE,
     n_rand_iters: int = _DEFAULT_N_RAND_ITERS,
     random_state: int = 0,
+    executor: ProcessPoolExecutor | None = None,
 ) -> np.ndarray:
     """Return per-cell int32 subcluster label, shape (n_cells,).
 
@@ -282,6 +332,7 @@ def random_tree_subcluster(
             min_cluster_size_recurse=min_cluster_size_recurse,
             n_rand_iters=n_rand_iters,
             rng=master_rng,
+            executor=executor,
         )
 
         # Centroid-based assignment for the remaining cells (and, for symmetry,
@@ -312,5 +363,40 @@ def random_tree_subcluster(
         min_cluster_size_recurse=min_cluster_size_recurse,
         n_rand_iters=n_rand_iters,
         rng=master_rng,
+        executor=executor,
     )
     return labels
+
+
+def random_tree_subcluster(
+    cnv_matrix: np.ndarray,
+    *,
+    subsample_for_tree: int = 500,
+    tumor_subcluster_pval: float = 0.1,
+    hclust_method: str = "ward",
+    window_size: int = _DEFAULT_WINDOW_SIZE,
+    max_recursion_depth: int = _DEFAULT_MAX_RECURSION_DEPTH,
+    min_cluster_size_recurse: int = _DEFAULT_MIN_CLUSTER_SIZE_RECURSE,
+    n_rand_iters: int = _DEFAULT_N_RAND_ITERS,
+    random_state: int = 0,
+    tree_workers: int = 1,
+) -> np.ndarray:
+    """Run random trees; tree_workers parallelizes independent permutations.
+
+    Spawn-based workers require the caller's main module to use the usual
+    ``if __name__ == '__main__'`` guard. The default remains serial.
+    """
+    if tree_workers < 1:
+        raise ValueError("tree_workers must be >= 1")
+    kwargs = dict(subsample_for_tree=subsample_for_tree,
+                  tumor_subcluster_pval=tumor_subcluster_pval,
+                  hclust_method=hclust_method, window_size=window_size,
+                  max_recursion_depth=max_recursion_depth,
+                  min_cluster_size_recurse=min_cluster_size_recurse,
+                  n_rand_iters=n_rand_iters,
+                  random_state=random_state)
+    if tree_workers == 1:
+        return _random_tree_subcluster_impl(cnv_matrix, **kwargs)
+    # Spawn avoids forking an already initialized Numba/OpenMP runtime.
+    with ProcessPoolExecutor(max_workers=tree_workers, mp_context=mp.get_context("spawn")) as pool:
+        return _random_tree_subcluster_impl(cnv_matrix, executor=pool, **kwargs)
