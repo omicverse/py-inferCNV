@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Corrected
+
+- Exclude unannotated/excluded chromosomes before filtering and library-size
+  normalization so their counts do not affect retained genes.
+- Construct random-tree input from step-04 expression with linear-space
+  reference means; use R-style running-mean endpoints and configurable
+  chromosome/start order. Fit all cells by default and forward tree controls
+  from `InferCNVConfig`.
+- Calibrate i6 with float64 input, R-compatible MT/Inversion/Rejection draws,
+  R sampling order and weighted GCV splines, including repeated-input pooling
+  and extrapolation. Honor `prune_outliers=False` in hspike replay.
+- Implement `reassignCNVs=True` and keep post-Bayes matrix states, exported
+  region states and CN values consistent. Preserve original posterior-row
+  identifiers through filtering.
+
+### Added
+
+- Explicit legacy calibration/tree settings and transient tree-input fields.
+- `hmm_states_filtered`, AnnData persistence of that matrix, and a full
+  pre-filter posterior index table alongside retained regions.
+- Synthetic R numerical references and regression tests for normalization,
+  count-to-tree handoff, tree smoothing, calibration, pruning and exports.
+
+### Compatibility
+
+These corrections can change subclusters, i6 emissions and downstream calls.
+The i3/i6 Viterbi kernels are unchanged. `numpy_legacy` and the documented tree
+settings retain earlier components but do not reverse the other fixes.
+No R runtime or new runtime dependency is required. Package version remains
+0.2.0 until the maintainers choose a release version. Historical release notes
+below describe the earlier implementation and its validation fixtures.
+
 ## 0.2.0 (2026-04-25) — first stable release
 
 First stable cut. Phase 1 + Phase 2 + Phase 3 are all implemented and

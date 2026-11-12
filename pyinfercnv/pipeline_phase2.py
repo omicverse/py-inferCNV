@@ -159,6 +159,7 @@ def run_phase2(
     reference_cat: str | Sequence[str] | None = None,
     random_state: int = 42,
     profile: dict[str, Any] | None = None,
+    tree_input: NDArray[np.float64] | None = None,
 ) -> "InferCNVResult":
     """Orchestrate R steps 15 (subcluster), hspike (i6 calibration), 17 (HMM).
 
@@ -210,6 +211,12 @@ def run_phase2(
     random_state
         Propagated to hspike simulation and any stochastic subcluster
         backend (leiden / random_trees; qnorm is deterministic).
+    tree_input
+        Optional (n_cells, n_genes) random-trees input produced by Phase 1
+        from the step-04 matrix (``inv_log=True``, R gene order). Required
+        when ``config.tumor_subcluster_partition_method == "random_trees"``
+        and ``config.tree_input_source == "step04"``. Ignored by the
+        leiden / qnorm backends.
     profile
         Optional dict mutated in place (G1 P11). When called from
         :func:`pyinfercnv.pipeline.infercnv`, this is the same dict as
@@ -273,6 +280,7 @@ def run_phase2(
         cnv_matrix, is_reference,
         config=config, random_state=random_state, profile=profile,
         group_labels=group_labels,
+        tree_input=tree_input,
     )
 
     # HMM branch
@@ -414,6 +422,7 @@ def _run_subclustering(
     random_state: int,
     profile: dict[str, Any] | None,
     group_labels: NDArray[np.object_] | None = None,
+    tree_input: NDArray[np.float64] | None = None,
 ) -> NDArray[np.int32]:
     """Run the configured subcluster backend, per-observation-group when
     ``config.cluster_by_groups`` is True and ``group_labels`` is supplied.
@@ -438,6 +447,16 @@ def _run_subclustering(
     non-reference cells with reference cells marked by
     :data:`_SUBCLUSTER_REF_SENTINEL`.
 
+    tree_input
+        Optional (n_cells, n_genes) matrix used ONLY by the
+        ``random_trees`` backend (R builds it from the step-04 log matrix
+        via ``subtract_ref_expr_from_obs(inv_log=TRUE)``, in R's gene
+        order). Must be row-aligned with ``cnv_matrix``. When
+        ``config.tree_input_source == "step04"`` the caller (top-level
+        ``infercnv()``) always supplies it; direct ``run_phase2`` callers
+        must pass it too or a ``ValueError`` is raised (no silent
+        fallback to the ≈step-12 matrix).
+
     Returns
     -------
     labels
@@ -461,6 +480,29 @@ def _run_subclustering(
     method = getattr(config, "tumor_subcluster_partition_method", "leiden")
     cluster_by_groups = bool(getattr(config, "cluster_by_groups", True))
 
+    # The random-trees backend consumes a DIFFERENT matrix from the HMM:
+    # R builds it from the step-04 log matrix via
+    # subtract_ref_expr_from_obs(inv_log=TRUE), in R's gene order.
+    if method == "random_trees":
+        if tree_input is None:
+            if getattr(config, "tree_input_source", "step04") == "step04":
+                raise ValueError(
+                    "_run_subclustering: random_trees requires tree_input "
+                    "(step-04-derived, inv_log=True, R gene order). Pass "
+                    "tree_input=..., or set config.tree_input_source="
+                    "'cnv_matrix' to use the legacy ≈step-12 input."
+                )
+            tree_matrix = cnv_matrix
+        else:
+            if tree_input.shape[0] != cnv_matrix.shape[0]:
+                raise ValueError(
+                    "tree_input rows "
+                    f"{tree_input.shape[0]} != cnv_matrix rows {cnv_matrix.shape[0]}"
+                )
+            tree_matrix = np.asarray(tree_input, dtype=np.float64)
+    else:
+        tree_matrix = cnv_matrix
+
     def _partition(X: NDArray[np.float32]) -> NDArray[np.int32]:
         if method == "leiden":
             from pyinfercnv.subcluster.leiden import leiden_subcluster
@@ -474,7 +516,21 @@ def _run_subclustering(
             )
         if method == "random_trees":
             from pyinfercnv.subcluster.random_trees import random_tree_subcluster
-            return random_tree_subcluster(X, random_state=random_state)
+            return random_tree_subcluster(
+                X,
+                subsample_for_tree=getattr(config, "subsample_for_tree", None),
+                tumor_subcluster_pval=getattr(config, "tumor_subcluster_pval", 0.1),
+                window_size=getattr(config, "tumor_subcluster_window_size", 101),
+                max_recursion_depth=getattr(
+                    config, "tumor_subcluster_max_recursion_depth", 3
+                ),
+                min_cluster_size_recurse=getattr(
+                    config, "tumor_subcluster_min_cluster_size_recurse", 10
+                ),
+                n_rand_iters=getattr(config, "tumor_subcluster_n_rand_iters", 100),
+                smooth_method=getattr(config, "tree_smooth_method", "runmean"),
+                random_state=random_state,
+            )
         if method == "qnorm":
             from pyinfercnv.subcluster.qnorm import qnorm_subcluster
             return qnorm_subcluster(X)
@@ -505,7 +561,7 @@ def _run_subclustering(
             member_idx = np.where(member_mask)[0]
             if member_idx.size == 0:
                 continue
-            sub_X = cnv_matrix[member_idx]
+            sub_X = tree_matrix[member_idx]
             local = np.asarray(_partition(sub_X), dtype=np.int32)
             # Offset so ids are globally unique across groups.
             # Each distinct local id gets a fresh global id.
@@ -519,7 +575,7 @@ def _run_subclustering(
         # Fallback (legacy / when no group_labels supplied): pooled
         # non-ref leiden + sentinel for refs. Preserved for callers
         # that do not pass reference_key.
-        non_ref_matrix = cnv_matrix[non_ref_mask]
+        non_ref_matrix = tree_matrix[non_ref_mask]
         non_ref_labels = np.asarray(_partition(non_ref_matrix), dtype=np.int32)
         labels = np.full(n_cells, _SUBCLUSTER_REF_SENTINEL, dtype=np.int32)
         non_ref_idx = np.where(non_ref_mask)[0]
@@ -641,8 +697,9 @@ def _run_hmm_by_subcluster(
                   state_mus=state_mus, state_sigmas=state_sigmas)`` or the
                   equivalent ``predict_i3`` overload.
                 * Broadcast the returned (1, len) trace to all ``s_members``.
-        4. Reference cells retain ``neutral_idx`` everywhere (R behaviour:
-           refs are not HMM-called; displays as neutral in downstream).
+        4. All non-sentinel subclusters, including reference groups, are
+           HMM-called and receive the broadcast state trace. Only cells
+           carrying the reference sentinel retain the neutral initialization.
 
     ``chr_pos`` column ordering is preserved — callers must not reorder.
 

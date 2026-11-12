@@ -39,12 +39,43 @@ _DEFAULT_MIN_CLUSTER_SIZE_RECURSE = 10
 _DEFAULT_N_RAND_ITERS = 100
 
 
-def _smooth_and_center(X: np.ndarray, window_size: int) -> np.ndarray:
-    """Equivalent of R `apply(X, 2, runmean, k=window) |> .center_columns('median')`.
+def _runmean_and_center(X: np.ndarray, window_size: int) -> np.ndarray:
+    """Equivalent of R `caTools::runmean(t(X), k=window, endrule="mean")`.
+
+    Box (uniform) kernel along the gene axis with ``endrule="mean"``
+    semantics: zero-padded numerator and denominator are both summed, so
+    the edge means divide by the number of in-range values (this is the
+    same cropped-window means at both ends).
+    """
+    X64 = np.asarray(X, dtype=np.float64)
+    n_genes = X64.shape[1]
+    w = min(window_size, n_genes if n_genes % 2 == 1 else n_genes - 1)
+    if w < 3:
+        return center_cells(np.ascontiguousarray(X64, dtype=np.float32), method="median")
+    h = w // 2
+    pad = np.pad(X64, ((0, 0), (h, h)), mode="constant")
+    cs = np.concatenate([np.zeros((X64.shape[0], 1)), np.cumsum(pad, axis=1)], axis=1)
+    num = cs[:, w:] - cs[:, :-w]
+    ones = np.pad(np.ones_like(X64), ((0, 0), (h, h)), mode="constant")
+    cs1 = np.concatenate([np.zeros((X64.shape[0], 1)), np.cumsum(ones, axis=1)], axis=1)
+    den = cs1[:, w:] - cs1[:, :-w]
+    return center_cells((num / den).astype(np.float32), method="median")
+
+
+def _smooth_and_center(
+    X: np.ndarray, window_size: int, smooth_method: str = "runmean"
+) -> np.ndarray:
+    """R `apply(X, 2, runmean, k=window) |> .center_columns('median')`.
 
     X is (n_cells, n_genes). Smoothing is along the gene axis within each cell
     (pyinfercnv layout). center_cells median-centres each cell row.
+
+    ``smooth_method``: ``"runmean"`` (R caTools::runmean, box kernel — R
+    parity default) or ``"pyramidinal"`` (legacy 0.2.0 triangular kernel).
     """
+    if smooth_method == "runmean":
+        return _runmean_and_center(X, window_size)
+
     n_genes = X.shape[1]
     # smooth_pyramidinal requires odd window >= 3. If the matrix is narrow we
     # shrink the window to the largest odd size <= min(window_size, n_genes).
@@ -86,6 +117,7 @@ def _parameterize_null(
     window_size: int,
     n_rand_iters: int,
     rng: np.random.Generator,
+    smooth_method: str = "runmean",
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Return (Z_obs, heights_obs, max_height_pval) from the random-trees null.
 
@@ -93,14 +125,14 @@ def _parameterize_null(
     permuted null matrices and records max(height) for each. Empirical ECDF
     gives the one-sided tail p-value.
     """
-    X_sc = _smooth_and_center(X, window_size)
+    X_sc = _smooth_and_center(X, window_size, smooth_method)
     Z_obs, heights_obs = _linkage_heights(X_sc, hclust_method)
     max_obs = float(heights_obs.max()) if heights_obs.size else 0.0
 
     max_rand_heights = np.empty(n_rand_iters, dtype=np.float64)
     for i in range(n_rand_iters):
         X_perm = _permute_columns(X, rng)
-        X_perm_sc = _smooth_and_center(X_perm, window_size)
+        X_perm_sc = _smooth_and_center(X_perm, window_size, smooth_method)
         _, h_rand = _linkage_heights(X_perm_sc, hclust_method)
         max_rand_heights[i] = float(h_rand.max()) if h_rand.size else 0.0
 
@@ -128,6 +160,7 @@ def _recursive_partition(
     min_cluster_size_recurse: int,
     n_rand_iters: int,
     rng: np.random.Generator,
+    smooth_method: str = "runmean",
     recursion_depth: int = 1,
 ) -> None:
     """In-place fill of `labels_out[cell_indices]` using the random-trees recursion.
@@ -149,6 +182,7 @@ def _recursive_partition(
         window_size=window_size,
         n_rand_iters=n_rand_iters,
         rng=rng,
+        smooth_method=smooth_method,
     )
 
     if p_val_obs > tumor_subcluster_pval or heights.size < 2:
@@ -165,7 +199,7 @@ def _recursive_partition(
 
     # Recompute Z on the already-smoothed matrix so `fcluster` sees the same
     # linkage as the one whose heights we cut from.
-    X_sc = _smooth_and_center(X, window_size)
+    X_sc = _smooth_and_center(X, window_size, smooth_method)
     Z_sc, _ = _linkage_heights(X_sc, hclust_method)
     grps = fcluster(Z_sc, t=cut_height, criterion="distance")
     uniq = np.unique(grps)
@@ -197,6 +231,7 @@ def _recursive_partition(
                 min_cluster_size_recurse=min_cluster_size_recurse,
                 n_rand_iters=n_rand_iters,
                 rng=rng,
+                smooth_method=smooth_method,
                 recursion_depth=recursion_depth + 1,
             )
         else:
@@ -208,13 +243,14 @@ def _recursive_partition(
 def random_tree_subcluster(
     cnv_matrix: np.ndarray,
     *,
-    subsample_for_tree: int = 500,
+    subsample_for_tree: int | None = None,
     tumor_subcluster_pval: float = 0.1,
     hclust_method: str = "ward",  # noqa: N803 (R kwarg name preserved)
     window_size: int = _DEFAULT_WINDOW_SIZE,
     max_recursion_depth: int = _DEFAULT_MAX_RECURSION_DEPTH,
     min_cluster_size_recurse: int = _DEFAULT_MIN_CLUSTER_SIZE_RECURSE,
     n_rand_iters: int = _DEFAULT_N_RAND_ITERS,
+    smooth_method: str = "runmean",
     random_state: int = 0,
 ) -> np.ndarray:
     """Return per-cell int32 subcluster label, shape (n_cells,).
@@ -228,7 +264,10 @@ def random_tree_subcluster(
     cnv_matrix
         (n_cells, n_genes) CNV log2 fold-change matrix.
     subsample_for_tree
-        Upper bound on cells used for the recursive tree fit. Default 500.
+        Upper bound on cells used for the recursive tree fit. ``None``
+        (default) fits the tree on all cells, matching R
+        (R has no tree subsampling). An int enables the legacy 0.2.0
+        nearest-centroid subsample path.
     tumor_subcluster_pval
         Tail p-value threshold (R `p_val`, default 0.1).
     hclust_method
@@ -239,6 +278,9 @@ def random_tree_subcluster(
         R recursion stop conditions.
     n_rand_iters
         Permutation null size (R default 100).
+    smooth_method
+        ``"runmean"`` (R caTools::runmean box kernel — parity default) or
+        ``"pyramidinal"`` (legacy triangular kernel).
     random_state
         Seed for both subsampling and null permutations.
     """
@@ -255,7 +297,7 @@ def random_tree_subcluster(
     master_rng = np.random.default_rng(random_state)
 
     # --- P7 subsample path -------------------------------------------------
-    if n_cells > subsample_for_tree:
+    if subsample_for_tree is not None and n_cells > subsample_for_tree:
         warnings.warn(
             f"random_tree_subcluster: n_cells={n_cells} exceeds "
             f"subsample_for_tree={subsample_for_tree}; fitting tree on a "
@@ -282,6 +324,7 @@ def random_tree_subcluster(
             min_cluster_size_recurse=min_cluster_size_recurse,
             n_rand_iters=n_rand_iters,
             rng=master_rng,
+            smooth_method=smooth_method,
         )
 
         # Centroid-based assignment for the remaining cells (and, for symmetry,
@@ -312,5 +355,6 @@ def random_tree_subcluster(
         min_cluster_size_recurse=min_cluster_size_recurse,
         n_rand_iters=n_rand_iters,
         rng=master_rng,
+        smooth_method=smooth_method,
     )
     return labels

@@ -117,6 +117,43 @@ def _build_chromosome_layout(
     return chr_pos, gene_perm
 
 
+def _build_chromosome_layout_r_order(
+    var_df: pd.DataFrame, exclude_chromosomes: Sequence[str]
+) -> tuple[dict[str, int], np.ndarray]:
+    """Return (chr_pos, gene_perm) using R infercnv's object gene order.
+
+    R's ``CreateInfercnvObject()`` keeps the gene-ordering file order; for
+    the hg38 ordering used here that is chromosome **lexicographic** order
+    (chr1, chr10, chr11, ..., chr19, chr2, chr20, ...), then gene start.
+    pyinfercnv's own Phase-1 layout uses natural (numeric) chromosome
+    order. The random-trees input must use R's order because the runmean
+    smoothing window runs along the full gene axis and therefore crosses
+    chromosome boundaries.
+    """
+    if "chromosome" not in var_df.columns:
+        raise ValueError(
+            "adata.var must have 'chromosome' column. Use io.genome.load_gene_positions "
+            "and merge into adata.var first."
+        )
+    mask = var_df["chromosome"].notna() & ~var_df["chromosome"].isin(exclude_chromosomes)
+    kept = var_df[mask].copy()
+
+    sorted_chroms = sorted(str(c) for c in kept["chromosome"].unique())
+    out_idx: list = []
+    chr_pos: dict[str, int] = {}
+    running = 0
+    for c in sorted_chroms:
+        sub = kept[kept["chromosome"].astype(str) == c]
+        if "start" in sub.columns:
+            sub = sub.sort_values("start", kind="mergesort")
+        chr_pos[c] = running
+        out_idx.extend(sub.index.tolist())
+        running += len(sub)
+
+    gene_perm = var_df.index.get_indexer(out_idx)
+    return chr_pos, gene_perm
+
+
 def infercnv(
     adata: "AnnData",
     *,
@@ -138,6 +175,25 @@ def infercnv(
     t0 = time.perf_counter()
     X = extract_counts(adata, counts_layer=cfg.counts_layer)
     _profile_block(profile, "01_extract", t0, rss0)
+
+    # Step 1b — exclude chr_exclude genes BEFORE filtering / normalization.
+    # R parity: `CreateInfercnvObject()` drops chrX/Y/M while building the
+    # object, i.e. before `require_above_min_mean_expr_cutoff` and before
+    # `normalize_by_seq_depth`. Excluding them later (after normalize)
+    # changes every cell's library-size denominator.
+    var_all = adata.var
+    if "chromosome" in var_all.columns:
+        chr_keep = (
+            var_all["chromosome"].notna()
+            & ~var_all["chromosome"].isin(excl)
+        ).to_numpy()
+        if not bool(chr_keep.all()):
+            t0 = time.perf_counter()
+            rss = _rss_mb()
+            keep_idx = np.where(chr_keep)[0]
+            X = X[:, keep_idx] if sp.issparse(X) else X[:, keep_idx]
+            var_all = var_all.iloc[keep_idx].copy()
+            _profile_block(profile, "01b_exclude_chromosomes", t0, rss)
 
     # Identify reference cells
     if reference_key is None or reference_cat is None:
@@ -170,7 +226,7 @@ def infercnv(
         X, cutoff=cfg.cutoff, min_cells_per_gene=cfg.min_cells_per_gene,
     )
     X = X[:, keep] if sp.issparse(X) else X[:, keep]
-    var_kept = adata.var.iloc[np.where(keep)[0]].copy()
+    var_kept = var_all.iloc[np.where(keep)[0]].copy()
     if ref_counts_raw is not None:
         ref_counts_raw = ref_counts_raw[:, keep]
     _profile_block(profile, "03_filter_genes", t0, rss)
@@ -180,15 +236,16 @@ def infercnv(
     X = normalize_by_seq_depth(X)
     _profile_block(profile, "04_normalize", t0, rss)
 
-    # R-parity hspike source snapshot: post-filter + post-normalize +
-    # pre-log2. Mirrors infercnv_obj@expr.data at the moment R calls
-    # .build_and_add_hspike (inferCNV_ops.R:586-595). Dense float32 copy
-    # (hspike is always built on a small synthetic matrix, so this is a
-    # one-off ~MB on oligo). Nulled after Phase 2.
-    if sp.issparse(X):
-        cpm_matrix_f32: np.ndarray | None = X.toarray().astype(np.float32, copy=False)
+    # hspike uses all post-filter, depth-normalized cells before log2.
+    # Match R's gene-index sampling order and precision. The historical
+    # field name is retained; this transient snapshot is freed after Phase 2.
+    if cfg.hspike_calibration_backend == "r_compatible":
+        _, hspike_perm = _build_chromosome_layout_r_order(var_kept, excl)
+        cpm_matrix_f32 = (X[:, hspike_perm].toarray() if sp.issparse(X)
+                          else np.asarray(X[:, hspike_perm], dtype=np.float64))
     else:
-        cpm_matrix_f32 = np.ascontiguousarray(X, dtype=np.float32)
+        cpm_matrix_f32 = (X.toarray().astype(np.float32) if sp.issparse(X)
+                          else np.ascontiguousarray(X, dtype=np.float32))
 
     # Step 4 — log2(x+1)
     t0 = time.perf_counter(); rss = _rss_mb()
@@ -212,6 +269,12 @@ def infercnv(
     X_dense = X.toarray().astype(np.float64) if sp.issparse(X) else np.ascontiguousarray(X, dtype=np.float64)
     _profile_block(profile, "06_densify", t0, rss)
 
+    # R-parity step-04 snapshot: the log2 matrix BEFORE reference
+    # subtraction. R's random-trees input is built from this matrix via
+    # ``subtract_ref_expr_from_obs(obj04, inv_log=TRUE)``; keep it so
+    # Phase 2 can reproduce the tree input from counts (no R injection).
+    step04_f64 = X_dense.copy()
+
     # Reference groups
     if reference_key is None or reference_cat is None or len(ref_idx_all) == 0:
         ref_groups: dict[str, list[int]] = {"proxyNormal": list(range(X_dense.shape[0]))}
@@ -221,6 +284,32 @@ def infercnv(
             str(c): np.where(adata.obs[reference_key].to_numpy() == c)[0].tolist()
             for c in cats
         }
+
+    # R-parity random-trees input (no R injection): R builds it from the
+    # step-04 log matrix via subtract_ref_expr_from_obs(obj04, inv_log=TRUE)
+    # and keeps the object's chromosome-lexicographic gene order. Compute
+    # it here so Phase 2 consumes a matrix generated purely from counts.
+    tree_input_f64: np.ndarray | None = None
+    if (
+        cfg.tumor_subcluster_partition_method == "random_trees"
+        and cfg.tree_input_source == "step04"
+    ):
+        t0 = time.perf_counter()
+        rss = _rss_mb()
+        tree_input_f64 = subtract_reference(
+            step04_f64,
+            ref_groups=ref_groups,
+            use_bounds=cfg.ref_subtract_use_mean_bounds,
+            inv_log=True,
+        )
+        if cfg.tree_gene_order == "r_lexicographic":
+            _, gene_perm_r = _build_chromosome_layout_r_order(var_kept, excl)
+            # gene_perm_local maps var_kept -> natural column order; invert it
+            # to express the R order as positions in the natural-order matrix.
+            inv_natural = np.empty_like(gene_perm_local)
+            inv_natural[gene_perm_local] = np.arange(gene_perm_local.size)
+            tree_input_f64 = tree_input_f64[:, inv_natural[gene_perm_r]]
+        _profile_block(profile, "06b_tree_input", t0, rss)
 
     # Step 8 — subtract ref (1st pass, bounded if K>1)
     t0 = time.perf_counter(); rss = _rss_mb()
@@ -293,6 +382,8 @@ def infercnv(
         ref_counts_raw=ref_counts_raw,
         cnv_matrix_f64=smoothed,
         cpm_matrix_f32=cpm_matrix_f32,
+        step04_matrix_f64=step04_f64,
+        tree_input_f64=tree_input_f64,
         profile=profile,
     )
 
@@ -303,6 +394,7 @@ def infercnv(
             result, adata, config=cfg,
             reference_key=reference_key, reference_cat=reference_cat,
             random_state=cfg.random_state, profile=profile,
+            tree_input=tree_input_f64,
         )
 
     # Drop the transient companion fields once Phase 2 has consumed them.
@@ -311,6 +403,8 @@ def infercnv(
     if cfg.HMM:
         result.cnv_matrix_f64 = None
         result.cpm_matrix_f32 = None
+        result.step04_matrix_f64 = None
+        result.tree_input_f64 = None
 
     # Phase 3 — BayesNet / mask_non_DE / denoise + R-faithful step 20 proxy.
     # Triggered when HMM is on (R runs step 20 whenever ``HMM=TRUE``,

@@ -41,6 +41,7 @@ def subtract_reference(
     *,
     ref_groups: Mapping[str, Sequence[int]],
     use_bounds: bool = True,
+    inv_log: bool = False,
 ) -> np.ndarray:
     """Apply per-gene reference subtraction to all cells.
 
@@ -54,13 +55,34 @@ def subtract_reference(
     use_bounds
         If True and len(ref_groups)>1, subtract per spec bounds rule. If False,
         subtract grand mean across all ref cells.
+    inv_log
+        R ``subtract_ref_expr_from_obs(inv_log=TRUE)`` semantics (used by
+        ``define_signif_tumor_subclusters_via_random_smooothed_trees`` to
+        build the random-trees input from the step-04 log matrix). When
+        True, each reference group's per-gene mean is computed in linear
+        space and re-logged: ``log2(mean(2**X[ref] - 1) + 1)``; the
+        bounded subtraction then runs on the original log matrix X.
+        Default False keeps the legacy log-space mean behaviour.
     """
     Xc = np.asarray(X, dtype=np.float64)
 
     if not ref_groups:
         raise ValueError("ref_groups must be non-empty")
 
-    means = _compute_ref_group_means(Xc, ref_groups)
+    if inv_log:
+        # R infercnv:::.get_normal_gene_mean_bounds(inv_log=TRUE):
+        #   grp_means <- vapply(ref_groups, function(ref_group) {
+        #       log2(mean(2 ** x[ref_group] - 1) + 1)
+        #   }, double(1))
+        K = len(ref_groups)
+        means = np.empty((K, Xc.shape[1]), dtype=np.float64)
+        for k, idx in enumerate(ref_groups.values()):
+            idx_arr = np.asarray(list(idx), dtype=np.int64)
+            means[k] = np.log2(
+                np.mean(np.exp2(Xc[idx_arr, :]) - 1.0, axis=0) + 1.0
+            )
+    else:
+        means = _compute_ref_group_means(Xc, ref_groups)
 
     if use_bounds and means.shape[0] > 1:
         bounds_min = means.min(axis=0)

@@ -52,6 +52,9 @@ class InferCNVConfig:  # noqa: N801
     HMM_type: HMMType = "i6"  # noqa: N815
     HMM_transition_prob: float = 1e-6  # noqa: N815
     HMM_i3_pval: float = 0.05  # noqa: N815
+    # Native R-compatible RNG, grouped sampling and weighted GCV splines.
+    # numpy_legacy retains the earlier NumPy calibration arithmetic.
+    hspike_calibration_backend: Literal["r_compatible", "numpy_legacy"] = "r_compatible"
     # Phase 3 step 18/19 — BayesNet posterior threshold (R
     # `inferCNV_ops.R:275`; guard at L1364 is ``BayesMaxPNormal > 0``).
     # **Py default diverges from R**: R ships 0.5 (Bayes on). Py ships
@@ -96,6 +99,34 @@ class InferCNVConfig:  # noqa: N801
     # cells pooled, and ref cells get a single sentinel label. Default
     # matches R behaviour.
     cluster_by_groups: bool = True
+
+    # --- Phase 2 random_trees knobs (R infercnv::run() defaults) ---
+    # R `inferCNV_tumor_subclusters.random_smoothed_trees.R` defaults:
+    # p_val=0.1, window_size=101, max_recursion_depth=3,
+    # min_cluster_size_recurse=10, num_rand_iters=100. R has NO cell
+    # subsampling for the tree, so `subsample_for_tree=None` means "fit the
+    # tree on all cells" (R parity); an int preserves the legacy 0.2.0
+    # nearest-centroid subsample path.
+    tumor_subcluster_pval: float = 0.1
+    tumor_subcluster_window_size: int = 101
+    tumor_subcluster_max_recursion_depth: int = 3
+    tumor_subcluster_min_cluster_size_recurse: int = 10
+    tumor_subcluster_n_rand_iters: int = 100
+    subsample_for_tree: int | None = None
+    # Tree internal smoothing. R uses caTools::runmean (box kernel,
+    # endrule="mean"); pyinfercnv 0.2.0 used pyramidinal (triangular).
+    # "runmean" is the R-parity default.
+    tree_smooth_method: Literal["runmean", "pyramidinal"] = "runmean"
+    # Gene order for the tree input. R's infercnv object is ordered by
+    # chromosome lexicographically (chr1, chr10, ..., chr2, ...) then start;
+    # py's Phase-1 matrix uses natural (numeric) chromosome order.
+    # "r_lexicographic" is the R-parity default.
+    tree_gene_order: Literal["r_lexicographic", "natural"] = "r_lexicographic"
+    # Tree input source. R builds the tree input from the step-04 log matrix
+    # via `subtract_ref_expr_from_obs(inv_log=TRUE)`. "step04" reproduces
+    # that; "cnv_matrix" preserves the legacy 0.2.0 behaviour (feeds the
+    # ~R-step12 matrix into the tree).
+    tree_input_source: Literal["step04", "cnv_matrix"] = "step04"
 
     # --- Phase 2 Leiden stability knobs (Track A closeout, default off) ---
     # n_seeds > 1 runs Leiden N times with seeds (random_state,
@@ -173,4 +204,49 @@ class InferCNVConfig:  # noqa: N801
             raise ValueError(
                 "tumor_subcluster_min_size must be >= 1 or None, "
                 f"got {self.tumor_subcluster_min_size}"
+            )
+        if not 0.0 < self.tumor_subcluster_pval < 1.0:
+            raise ValueError(
+                "tumor_subcluster_pval must be in (0, 1), "
+                f"got {self.tumor_subcluster_pval}"
+            )
+        if self.tumor_subcluster_window_size < 3 or self.tumor_subcluster_window_size % 2 == 0:
+            raise ValueError(
+                "tumor_subcluster_window_size must be odd and >= 3, "
+                f"got {self.tumor_subcluster_window_size}"
+            )
+        if self.tumor_subcluster_max_recursion_depth < 1:
+            raise ValueError(
+                "tumor_subcluster_max_recursion_depth must be >= 1, "
+                f"got {self.tumor_subcluster_max_recursion_depth}"
+            )
+        if self.tumor_subcluster_min_cluster_size_recurse < 1:
+            raise ValueError(
+                "tumor_subcluster_min_cluster_size_recurse must be >= 1, "
+                f"got {self.tumor_subcluster_min_cluster_size_recurse}"
+            )
+        if self.tumor_subcluster_n_rand_iters < 1:
+            raise ValueError(
+                "tumor_subcluster_n_rand_iters must be >= 1, "
+                f"got {self.tumor_subcluster_n_rand_iters}"
+            )
+        if self.subsample_for_tree is not None and self.subsample_for_tree < 3:
+            raise ValueError(
+                "subsample_for_tree must be >= 3 or None, "
+                f"got {self.subsample_for_tree}"
+            )
+        if self.tree_smooth_method not in ("runmean", "pyramidinal"):
+            raise ValueError(
+                "tree_smooth_method must be 'runmean' or 'pyramidinal', "
+                f"got {self.tree_smooth_method!r}"
+            )
+        if self.tree_gene_order not in ("r_lexicographic", "natural"):
+            raise ValueError(
+                "tree_gene_order must be 'r_lexicographic' or 'natural', "
+                f"got {self.tree_gene_order!r}"
+            )
+        if self.tree_input_source not in ("step04", "cnv_matrix"):
+            raise ValueError(
+                "tree_input_source must be 'step04' or 'cnv_matrix', "
+                f"got {self.tree_input_source!r}"
             )

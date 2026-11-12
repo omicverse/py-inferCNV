@@ -2,7 +2,17 @@
 
 Pure-Python re-implementation of [inferCNV](https://github.com/broadinstitute/inferCNV) (Broad Institute) — single-cell CNV inference from scRNA-seq, AnnData-native, R-parity-audited.
 
-**Status:** v0.2.0 — **Phase 1 + Phase 2 + Phase 3** all complete and R-parity-validated. Phase 1 (preprocess, smoothing, centering, denoise) is bit-exact (`max_diff < 1e-10` on 7 of 8 step gates). Phase 2 (tumor subclustering + HMM i3/i6 state calls + hspike calibration + CNV regions): i3 Jaccard 1.000 (bit-exact post linear-FC switch), i6 Jaccard 0.979. Phase 3 (BayesNet Gibbs + filterHighPNormals + state→CN-ratio proxy + mask_non_DE + denoise) is wired into top-level `infercnv()` with fail-loud guards on R-default branches not yet ported (`reassignCNVs=True`, `noise_logistic=True`, `sim_method='splatter'/'simple'`, `postMcmcMethod='removeCells'`, `threshold='auto'` — all R defaults set conservatively in `InferCNVConfig`). Step 20 i6/i3 are bit-exact (`max_diff = 0`); step 21 mask_non_DE is bit-exact (`max_diff = 1.110e-16`); step 22 denoise is bit-exact. The primary parity metric is **Spearman ρ on the continuous post-Phase-1 CNV matrix** (the quantity every downstream step consumes): **ρ = 1.0000 on three 10x UMI patients (DCIS1/TNBC1/TNBC3, n=520-1399 cells) and 0.9998 on the smart-seq2 oligodendroglioma fixture**; Pearson 0.993-0.999. HMM state rank-correlation (i3 ordinal 0-2) is 0.92-0.96 across the three 3CA patients. **pyinfercnv is a Python-accelerated re-implementation of R infercnv**; parity numbers come from the R package's own bundled test fixture plus three 3CA kilocell 10x UMI patients. Early wallclock evidence: **25–192× py-vs-R speedup** (see `scripts/phase2_benchmark/` — a py-vs-R wallclock + regression-detection suite, not a real-world correctness benchmark).
+**Status:** Phase 1 preprocessing, Phase 2 subclustering/HMM and Phase 3
+Bayes filtering are available. The current development changes correct the
+i6 hspike calibration, random-tree input and smoothing, and Bayes state/region
+exports. These fixes can change subclusters and HMM/Bayes results; see the
+migration notes below. The i3/i6 Viterbi decoding kernels are unchanged.
+
+`reassignCNVs=True` is supported. Remaining unsupported branches include
+`noise_logistic=True`, `sim_method='splatter'/'simple'`,
+`postMcmcMethod='removeCells'` and `threshold='auto'`; they raise explicit
+errors. The benchmark tables below describe the earlier 0.2.0 implementation
+and its fixtures, rather than validation of every new default.
 
 ## Installation
 
@@ -53,7 +63,7 @@ infercnv(
 ```
 
 **Phase 2 + 3** — set `HMM=True` (and optionally `BayesMaxPNormal=0.5`,
-`mask_nonDE_genes=True`, `denoise=True`, `reassignCNVs=False`); see
+`mask_nonDE_genes=True`, `denoise=True`, `reassignCNVs=True`); see
 `examples/tutorial_phase{1,2,3}.ipynb` for end-to-end notebook walk-throughs
 on the bundled R inferCNV oligodendroglioma fixture.
 
@@ -63,6 +73,84 @@ CLI:
 pyinfercnv run-h5ad --input dataset.h5ad --output out.h5ad \
     --reference-key cell_type --reference-cat Microglia,Oligodendrocytes
 ```
+
+## HMM and random-tree correctness changes
+
+The count-to-HMM path now follows these steps:
+
+- Exclude unannotated and excluded chromosomes before gene filtering and
+  library-size normalization, matching R object construction. Counts on
+  excluded chromosomes no longer affect the normalization denominator.
+- Build `random_trees` input from the step-04 log matrix, subtracting reference
+  group means computed in linear space (`inv_log=True`). HMM decoding still
+  consumes the continuous Phase 1 CNV matrix, not the tree input.
+- Smooth tree input with a box running mean and cropped endpoint windows.
+  The default gene order is chromosome lexicographic order, then gene start;
+  the Phase 1 CNV matrix keeps its natural chromosome order. The full gene
+  axis is smoothed for tree building, so its order affects the partition.
+- Fit trees on all cells by default. Explicit subsampling remains available
+  for users who accept nearest-centroid assignment for the other cells.
+- Calibrate i6 using float64 normalized counts and a local R-compatible
+  MT/Inversion/Rejection stream. Gene/group sampling order, dropout draw
+  consumption, repeated spline inputs, GCV and linear extrapolation are
+  covered by synthetic R references. Hspike replay honors `prune_outliers`.
+- Apply Bayes removal and optional posterior-argmax reassignment to the final
+  matrix and region table together. Exported state and CN values therefore
+  describe the same final calls.
+
+No R runtime is needed for normal use. The R-generated numerical references
+are checked into `tests/unit/fixtures/`, together with their regeneration
+script and provenance. They verify calibration primitives; they do not imply
+bitwise equality of arbitrary end-to-end R/Python runs. Random-tree
+permutations and Bayes sampling still use their own NumPy streams.
+
+### Configuration and migration
+
+| Setting | Current default | Earlier behavior available explicitly |
+|---|---|---|
+| `hspike_calibration_backend` | `"r_compatible"` | `"numpy_legacy"`: earlier NumPy sampling and approximate spline |
+| `tree_input_source` | `"step04"` | `"cnv_matrix"`: final Phase 1 matrix |
+| `tree_smooth_method` | `"runmean"` | `"pyramidinal"`: triangular kernel |
+| `tree_gene_order` | `"r_lexicographic"` | `"natural"`: meaningful with step-04 input |
+| `subsample_for_tree` | `None` (all cells) | `500`: earlier cell cap |
+| `reassignCNVs` | `True` (now implemented) | `False`: remove high-P(normal) regions only |
+
+The tree controls `tumor_subcluster_pval`, `tumor_subcluster_window_size`,
+`tumor_subcluster_max_recursion_depth`,
+`tumor_subcluster_min_cluster_size_recurse` and
+`tumor_subcluster_n_rand_iters` are now forwarded by `InferCNVConfig`.
+Direct `run_phase2()` callers using the default random-tree path must supply
+`tree_input`; otherwise a `ValueError` explains the missing input. Full-cell
+trees require more memory and time than capped trees. Legacy settings select
+earlier components; they do not undo normalization, pruning or export fixes
+and cannot guarantee reproduction of all historical outputs.
+
+### Bayes result mapping
+
+`result.hmm_states` remains the step-17 matrix.
+`result.hmm_states_filtered` stores the post-Bayes step-19 matrix and is
+written to `adata.obsm["X_cnv_hmm_states_filtered"]` with the default key.
+`cnv_regions` contains retained regions. `posterior_p_normal` contains all
+pre-filter regions, including those removed, with:
+
+- `region_id` and `posterior_row`, indexing the unfiltered `bayes_posterior`;
+- `state_step17`, final zero-based `state`, and one-based `state_r`;
+- final `cn`, `p_normal`, `p_state_0..K-1` and `removed_by_pnormal`.
+
+Bin endpoints are inclusive. Region IDs are local to a run. i6 `cn` uses the
+model levels `[0.01, 0.5, 1, 1.5, 2, 3]`; i3 retains its signed-delta convention.
+A region reassigned to neutral can remain in the retained table when its
+P(normal) is at or below the removal threshold.
+
+Run the portable regression tests from a development installation:
+
+```bash
+python -m pytest tests/unit tests/integration tests/test_io_contract.py tests/test_smoke.py
+```
+
+Optional cross-checks requiring `hmmlearn` or external R dumps skip when
+those inputs are unavailable. Numerical fixture generation is documented in
+`tests/unit/fixtures/README.md`.
 
 ## Parity status (Phase 1)
 
