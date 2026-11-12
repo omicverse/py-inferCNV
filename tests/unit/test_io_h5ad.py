@@ -61,9 +61,9 @@ def test_custom_layer_name():
     assert np.array_equal(out.toarray(), [[2, 3]])
 
 
-def test_output_is_csr_float32():
+def test_output_is_csr_float64():
     X = sp.csc_matrix(np.array([[1, 2], [3, 4]], dtype=np.int32))
     ad = _build_adata(X, has_counts_layer=True)
     out = extract_counts(ad)
     assert sp.isspmatrix_csr(out)
-    assert out.dtype == np.float32
+    assert out.dtype == np.float64

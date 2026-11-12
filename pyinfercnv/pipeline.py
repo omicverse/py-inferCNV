@@ -85,7 +85,7 @@ def _build_chromosome_layout(
     var_df: pd.DataFrame, exclude_chromosomes: Sequence[str]
 ) -> tuple[dict[str, int], np.ndarray]:
     """Return (chr_pos, gene_perm) — chromosome -> start col idx + permutation
-    that sorts genes by chromosome (natural order) then start position."""
+    that sorts genes by chromosome (natural order) then start and end position."""
     if "chromosome" not in var_df.columns:
         raise ValueError(
             "adata.var must have 'chromosome' column. Use io.genome.load_gene_positions "
@@ -108,7 +108,10 @@ def _build_chromosome_layout(
     for c in sorted_chroms:
         sub = kept[kept["chromosome"] == c]
         if "start" in sub.columns:
-            sub = sub.sort_values("start")
+            # R .order_reduce: order(chr, start, stop), ties kept in the
+            # expression matrix's gene order (stable sort)
+            keys = ["start", "end"] if "end" in sub.columns else ["start"]
+            sub = sub.sort_values(keys, kind="stable")
         chr_pos[c] = running
         out_idx.extend(sub.index.tolist())
         running += len(sub)
@@ -133,11 +136,27 @@ def infercnv(
     excl = tuple(exclude_chromosomes) if exclude_chromosomes is not None else cfg.chr_exclude
     profile: dict[str, dict[str, Any]] = {}
 
-    # Step 1 — extract counts (CSR float32)
+    # Step 1 — extract counts (CSR float64)
     rss0 = _rss_mb()
     t0 = time.perf_counter()
     X = extract_counts(adata, counts_layer=cfg.counts_layer)
     _profile_block(profile, "01_extract", t0, rss0)
+
+    # R CreateInfercnvObject keeps only genes with a position (.order_reduce)
+    # and drops chr_exclude chromosomes before any filtering or normalisation,
+    # so library sizes are computed without them.
+    if "chromosome" not in adata.var.columns:
+        raise ValueError(
+            "adata.var must have 'chromosome' column. Use io.genome.load_gene_positions "
+            "and merge into adata.var first."
+        )
+    chrom = adata.var["chromosome"]
+    placed = (chrom.notna() & ~chrom.isin(excl)).to_numpy()
+    if "start" in adata.var.columns and "end" in adata.var.columns:
+        placed &= ~((adata.var["start"].fillna(0) + adata.var["end"].fillna(0)) == 0).to_numpy()
+    var_placed = adata.var.iloc[np.where(placed)[0]]
+    if not placed.all():
+        X = X[:, placed] if sp.issparse(X) else X[:, placed]
 
     # Identify reference cells
     if reference_key is None or reference_cat is None:
@@ -170,7 +189,7 @@ def infercnv(
         X, cutoff=cfg.cutoff, min_cells_per_gene=cfg.min_cells_per_gene,
     )
     X = X[:, keep] if sp.issparse(X) else X[:, keep]
-    var_kept = adata.var.iloc[np.where(keep)[0]].copy()
+    var_kept = var_placed.iloc[np.where(keep)[0]].copy()
     if ref_counts_raw is not None:
         ref_counts_raw = ref_counts_raw[:, keep]
     _profile_block(profile, "03_filter_genes", t0, rss)
@@ -186,9 +205,9 @@ def infercnv(
     # (hspike is always built on a small synthetic matrix, so this is a
     # one-off ~MB on oligo). Nulled after Phase 2.
     if sp.issparse(X):
-        cpm_matrix_f32: np.ndarray | None = X.toarray().astype(np.float32, copy=False)
+        cpm_matrix_f32: np.ndarray | None = X.toarray().astype(np.float64, copy=False)  # float64 (R doubles)
     else:
-        cpm_matrix_f32 = np.ascontiguousarray(X, dtype=np.float32)
+        cpm_matrix_f32 = np.ascontiguousarray(X, dtype=np.float64)
 
     # Step 4 — log2(x+1)
     t0 = time.perf_counter(); rss = _rss_mb()
@@ -203,6 +222,10 @@ def infercnv(
         X = X[:, gene_perm_local]
     if ref_counts_raw is not None:
         ref_counts_raw = ref_counts_raw[:, gene_perm_local]
+    # R holds genes in genomic order from object creation on, and the hspike samples genes by
+    # row index, so its input must be in that order too.
+    if cpm_matrix_f32 is not None:
+        cpm_matrix_f32 = cpm_matrix_f32[:, gene_perm_local]
 
     # Densify (Phase 1: full matrix; Phase 1.5 will move to per-chrom chunks).
     # Phase 1 bit-exact path (2026-04-23): float64 through all intermediate
@@ -292,6 +315,7 @@ def infercnv(
         cell_meta=cell_meta,
         ref_counts_raw=ref_counts_raw,
         cnv_matrix_f64=smoothed,
+        gene_names=np.asarray(var_kept.index)[gene_perm_local],
         cpm_matrix_f32=cpm_matrix_f32,
         profile=profile,
     )
@@ -308,9 +332,6 @@ def infercnv(
     # Drop the transient companion fields once Phase 2 has consumed them.
     # When HMM is off we preserve them so a downstream caller can still
     # run ``run_phase2`` piecewise without rebuilding Phase 1.
-    if cfg.HMM:
-        result.cnv_matrix_f64 = None
-        result.cpm_matrix_f32 = None
 
     # Phase 3 — BayesNet / mask_non_DE / denoise + R-faithful step 20 proxy.
     # Triggered when HMM is on (R runs step 20 whenever ``HMM=TRUE``,
@@ -352,6 +373,11 @@ def infercnv(
             )
         from pyinfercnv.pipeline_phase3 import run_phase3
         result = run_phase3(result, config=cfg)
+
+    # Drop the transient float64 companions once Phases 2 and 3 have consumed them.
+    if cfg.HMM:
+        result.cnv_matrix_f64 = None
+        result.cpm_matrix_f32 = None
 
     if inplace:
         result.write_to_anndata(adata, key_added=key_added)

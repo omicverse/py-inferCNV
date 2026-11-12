@@ -17,9 +17,10 @@ options(warn = 1)  # surface warnings immediately
 suppressPackageStartupMessages(library(infercnv))
 
 # --- Absolute fixture paths (do not copy; reference in place) ---
-counts_file <- "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/oligodendroglioma_expression_downsampled.counts.matrix.gz"
-annotations_file <- "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/oligodendroglioma_annotations_downsampled.txt"
-gene_order_file <- "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
+ext <- Sys.getenv("PYINFERCNV_R_EXTDATA", system.file("extdata", package = "infercnv"))
+counts_file <- file.path(ext, "oligodendroglioma_expression_downsampled.counts.matrix.gz")
+annotations_file <- file.path(ext, "oligodendroglioma_annotations_downsampled.txt")
+gene_order_file <- file.path(ext, "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt")
 
 output_dir <- "./tests/r_out"
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
@@ -146,6 +147,7 @@ phase2_run <- function(hmm_type, tmp_dir) {
     # internal SNN/irlba which we do not replicate in python. The "simple"
     # path on both sides uses euclidean KNN + igraph::cluster_leiden with
     # CPM, so the C core is identical to python-igraph's community_leiden.
+    set.seed(42)   # each run starts from set.seed(42), as pyinfercnv's random_state=42
     result_obj <- infercnv::run(
         infercnv_obj              = fresh_obj,
         cutoff                    = 1,
@@ -268,6 +270,7 @@ phase3_run <- function(hmm_type, tmp_dir, do_bayes, do_mask, do_denoise,
         delim = "\t"
     )
 
+    set.seed(42)   # each run starts from set.seed(42), as pyinfercnv's random_state=42
     result_obj <- infercnv::run(
         infercnv_obj              = fresh_obj,
         cutoff                    = 1,
@@ -311,6 +314,7 @@ tryCatch({
         ref_group_names = ref_annotations,
         delim = "\t"
     )
+    set.seed(42)   # each run starts from set.seed(42), as pyinfercnv's random_state=42
     result_obj <- infercnv::run(
         infercnv_obj              = fresh_obj,
         cutoff                    = 1,

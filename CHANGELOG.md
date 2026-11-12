@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.1 (2026-11-12) — same results as R inferCNV 1.26.0 from the same seed
+
+- Genes on excluded chromosomes are dropped before the depth normalisation (as R's
+  `CreateInfercnvObject`); genes with equal start positions are ordered by end, then in the
+  matrix's order; normalisation divides then multiplies, as R. Counts are kept in float64
+  (float32 rounded non-integer expression values).
+- R's random number generator (`set.seed`, `sample`, `rnorm`, `runif`) and `smooth.spline` with
+  GCV are ported (`pyinfercnv._rcompat`). The hidden-spike simulation, its mean/variance and
+  dropout trends and the trend fit now follow R; outliers in the hidden spike are pruned only
+  with `prune_outliers=True` (as R); per-state means and sds use R's arithmetic, and the emission
+  sd is no longer clamped.
+- One R generator per run, drawn in R's order (hidden spike, subclustering, trend):
+  `random_state=s` gives the result of `set.seed(s); infercnv::run(...)`.
+- Subclustering: R's default `leiden_method="PCA"` (Seurat vst, ScaleData, RunPCA, SNN graph) is
+  implemented and is the default; the subclusters are computed on the linear fold-change matrix
+  after R's `z_score_filter`; Leiden uses R's defaults (2 iterations, beta 0.01) and draws R's
+  random numbers, so the same graph gives R's partition. New config fields `leiden_method`,
+  `leiden_function`, `leiden_resolution`, `k_nn`, `z_score_filter`.
+- CNV regions (the Bayesian filter's input) cover observation subclusters only, as in R.
+- Denoising and the HMM work on float64 matrices; `InferCNVResult.gene_names` records the column
+  genes (also `adata.uns[key]["genes"]`).
+- Benchmark against R on the oligodendroglioma example and six 10x breast tumours (`report/`).
+
 ## 0.2.0 (2026-04-25) — first stable release
 
 First stable cut. Phase 1 + Phase 2 + Phase 3 are all implemented and

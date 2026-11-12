@@ -90,6 +90,16 @@ class InferCNVConfig:  # noqa: N801
 
     # --- Phase 2 subcluster partition ---
     tumor_subcluster_partition_method: str = "leiden"  # noqa: N815
+    # R define_signif_tumor_subclusters / .single_tumor_leiden_subclustering defaults:
+    # "PCA" = Seurat vst + ScaleData + RunPCA(10) + FindNeighbors SNN graph (R default);
+    # "simple" = unweighted k-NN graph on the expression matrix.
+    leiden_method: Literal["PCA", "simple"] = "PCA"
+    leiden_function: Literal["CPM", "modularity"] = "CPM"
+    leiden_resolution: float | str = "auto"
+    k_nn: int = 20
+    # genes whose mean |z| over the reference cells reaches this are left out of the
+    # subclustering (R z_score_filter; 0 disables)
+    z_score_filter: float = 0.8
     # R cluster_by_groups=TRUE: run leiden independently per observation/
     # reference group (each annotation category is its own leiden input
     # and its own set of subcluster IDs). False => leiden on all non-ref

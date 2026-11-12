@@ -252,7 +252,7 @@ def test_keep_matrix_default_false():
     assert calib_with_matrix.hspike_matrix is not None
     assert calib_with_matrix.gene_chr_labels is not None
     assert calib_with_matrix.hspike_matrix.ndim == 2
-    assert calib_with_matrix.hspike_matrix.dtype == np.float32
+    assert calib_with_matrix.hspike_matrix.dtype == np.float64
     assert calib_with_matrix.gene_chr_labels.ndim == 1
 
 

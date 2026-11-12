@@ -321,10 +321,12 @@ def leiden_subcluster(
         import random as _random
         ig.set_random_number_generator(_random.Random(seed))
         try:
+            # R cluster_leiden defaults: beta = 0.01, n_iterations = 2
             part = g.community_leiden(
                 objective_function="CPM",
                 resolution=used_resolution,
-                n_iterations=-1,
+                beta=0.01,
+                n_iterations=2,
                 weights=None,
             )
         finally:
@@ -350,3 +352,142 @@ def leiden_subcluster(
         labels = _collapse_small_clusters(labels, idx, int(min_subcluster_size))
 
     return labels
+
+
+def _r_auto_resolution(n_cells: int) -> float:
+    """R ``(11.98 / n)^(1 / 1.165)``; R's ``^`` uses ``powl`` on x86-64."""
+    return float(np.power(np.longdouble(11.98 / n_cells), np.longdouble(1.0 / 1.165)))
+
+
+def _r_lower_edges(adj, combine: str):
+    """Edges of R ``graph_from_adjacency_matrix(adj, mode = combine)`` for a sparse matrix:
+    the lower triangle combined with the transposed upper one (``pmin``/``pmax``), zeros dropped,
+    in column-major order; self-loops kept (``diag = TRUE``). Returns (rows, cols, values)."""
+    from scipy import sparse
+
+    a = sparse.csr_matrix(adj, dtype=np.float64)
+    lo = sparse.tril(a, k=0).tocsc()
+    up = sparse.tril(sparse.triu(a, k=0).T, k=0).tocsc()
+    m = lo.minimum(up) if combine == "min" else lo.maximum(up)
+    m = sparse.csc_matrix(m)
+    m.eliminate_zeros()
+    m.sort_indices()
+    cols = np.repeat(np.arange(m.shape[1]), np.diff(m.indptr))
+    return m.indices.astype(np.int64), cols.astype(np.int64), m.data
+
+
+def _leiden_r(n_cells, rows, cols, weights, resolution, objective, rng):
+    """igraph Leiden as R ``cluster_leiden`` (2 iterations, ``beta = 0.01``) on R's generator."""
+    import igraph as ig
+
+    from pyinfercnv._rcompat.rng import RIgraphRNG
+
+    g = ig.Graph(n=n_cells, edges=np.column_stack([rows, cols]).tolist(), directed=False)
+    ig.set_random_number_generator(RIgraphRNG(rng))
+    try:
+        part = g.community_leiden(objective_function=objective,
+                                  weights=None if weights is None else list(weights),
+                                  resolution=resolution, beta=0.01, n_iterations=2)
+    finally:
+        ig.set_random_number_generator(None)
+    return np.asarray(part.membership, dtype=np.int32)
+
+
+def leiden_simple_r(cnv_matrix: np.ndarray, *, resolution: float | str = "auto", k_nn: int = 20,
+                    objective_function: str = "CPM", rng=None) -> np.ndarray:
+    """R ``.leiden_simple_snn``: ``nn2`` k-NN (the cell itself included), the adjacency of
+    cell -> neighbour, ``graph_from_adjacency_matrix(mode = "undirected")`` (asymmetric, so
+    ``"max"``), unweighted Leiden on R's generator ``rng`` (continuing its stream)."""
+    from scipy import sparse
+    from sklearn.neighbors import NearestNeighbors
+
+    from pyinfercnv._rcompat.rng import RRandom
+
+    X = np.asarray(cnv_matrix, dtype=np.float64)
+    n = X.shape[0]
+    if n < 3 or k_nn >= n:
+        return np.zeros(n, dtype=np.int32)
+    res = _r_auto_resolution(n) if resolution == "auto" else float(resolution)
+    idx = NearestNeighbors(n_neighbors=k_nn, algorithm="brute").fit(X).kneighbors(X, return_distance=False)
+    adj = sparse.csr_matrix((np.ones(n * k_nn), idx.ravel(), np.arange(0, n * k_nn + 1, k_nn)), shape=(n, n))
+    r, c, _ = _r_lower_edges(adj, "max")
+    return _leiden_r(n, r, c, None, res, objective_function, rng if rng is not None else RRandom(1))
+
+
+def _leiden(g, weights, resolution: float, objective: str, random_state: int) -> np.ndarray:
+    """igraph Leiden with R ``cluster_leiden``'s defaults (``beta = 0.01``, 2 iterations)."""
+    import random as _random
+
+    import igraph as ig
+    ig.set_random_number_generator(_random.Random(random_state))
+    try:
+        part = g.community_leiden(objective_function=objective, weights=weights,
+                                  resolution=resolution, beta=0.01, n_iterations=2)
+    finally:
+        ig.set_random_number_generator(None)
+    return np.asarray(part.membership, dtype=np.int32)
+
+
+def seurat_snn(embeddings: np.ndarray, k_nn: int = 20, prune: float = 1.0 / 15) -> "sparse.csr_matrix":
+    """Seurat ``FindNeighbors`` SNN graph: Jaccard index of the ``k_nn``-nearest-neighbour sets
+    (each set includes the cell itself), entries below ``prune`` dropped. Exact euclidean
+    neighbours (Seurat uses Annoy, which returns the exact neighbours on data of this size)."""
+    from scipy import sparse
+    from sklearn.neighbors import NearestNeighbors
+
+    n = embeddings.shape[0]
+    k = min(k_nn, n)
+    idx = NearestNeighbors(n_neighbors=k, algorithm="brute").fit(embeddings).kneighbors(
+        embeddings, return_distance=False)
+    nn = sparse.csr_matrix((np.ones(n * k), idx.ravel(), np.arange(0, n * k + 1, k)), shape=(n, n))
+    shared = (nn @ nn.T).tocsr()
+    shared.data = shared.data / (2 * k - shared.data)
+    shared.data[shared.data < prune] = 0.0
+    shared.eliminate_zeros()
+    return shared
+
+
+def leiden_subcluster_pca(
+    cnv_matrix: np.ndarray,
+    *,
+    resolution: float | str = "auto",
+    k_nn: int = 20,  # noqa: N803 (R kwarg name preserved)
+    objective_function: str = "CPM",
+    random_state: int = 0,
+    rng=None,
+) -> np.ndarray:
+    """R ``.leiden_seurat_preprocess_routine`` (``leiden_method = "PCA"``, R's default).
+
+    On the cells x genes expression matrix: Seurat ``FindVariableFeatures`` (vst, 2,000 genes),
+    ``ScaleData``, ``RunPCA(npcs = 10)``, ``FindNeighbors(k.param = k_nn)``; the SNN graph
+    (undirected, weighted, ``mode = "min"``) is partitioned with Leiden.
+
+    With ``rng`` (R's generator, :class:`pyinfercnv._rcompat.rng.RRandom`) the random numbers
+    follow R: ``RunPCA`` runs ``set.seed(42)`` and irlba draws one normal per feature, then
+    Leiden draws through R igraph's generator -- the partition is R's, and ``rng`` is left where
+    R's would be. Without ``rng`` a fresh generator seeded with ``random_state`` is used."""
+    from pyinfercnv._rcompat.rng import RRandom
+    from pyinfercnv._rcompat.seurat import run_pca, scale_data, vst
+
+    X = np.asarray(cnv_matrix, dtype=np.float64)
+    n_cells = X.shape[0]
+    if n_cells < 3 or k_nn >= n_cells:
+        return np.zeros(n_cells, dtype=np.int32)
+    rng = rng if rng is not None else RRandom(random_state)
+    used_resolution = _r_auto_resolution(n_cells) if resolution == "auto" else float(resolution)
+    genes_x_cells = X.T
+    try:
+        feat = vst(genes_x_cells, n_features=2000)
+    except Exception:                       # R: a warning in FindVariableFeatures -> simple path
+        return leiden_simple_r(X, resolution=used_resolution, k_nn=k_nn,
+                               objective_function=objective_function, rng=rng)
+    scaled = scale_data(genes_x_cells[feat])
+    var = np.var(scaled, axis=1)
+    keep = np.isfinite(var) & (var > 0)        # RunPCA keeps features with variance > 0
+    npcs = min(10, n_cells - 1)
+    emb = run_pca(scaled[keep], n_pcs=npcs)
+    rng.set_seed(42)                           # RunPCA(seed.use = 42)
+    rng.skip_normals(int(keep.sum()))          # irlba's start vector rnorm(n_features)
+    snn = seurat_snn(emb, k_nn=k_nn)
+    r, c, w = _r_lower_edges(snn, "min")
+    return _leiden_r(n_cells, r, c, w, used_resolution, objective_function, rng)

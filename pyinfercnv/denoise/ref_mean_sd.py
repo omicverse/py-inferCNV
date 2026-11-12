@@ -283,14 +283,21 @@ def _step22_denoise(
     # that helper pick the correct R-faithful fallback.
     ref_arg: np.ndarray | None = ref_idx if ref_idx.size > 0 else None
 
+    # R works on doubles: decide the band on the float64 matrix when Phase 1 kept it, and store
+    # the result in the dtype of ``cnv_matrix_fc``.
+    if getattr(result, "cnv_matrix_f64", None) is not None:
+        from pyinfercnv.pipeline_phase2 import _linear_fc_f64
+        fc_in = _linear_fc_f64(result, config)
+    else:
+        fc_in = result.cnv_matrix_fc
     denoised = denoise_by_ref_mean_sd(
-        result.cnv_matrix_fc,
+        fc_in,
         ref_arg,
         noise_filter=config.noise_filter,
         sd_amplifier=config.sd_amplifier,
         noise_logistic=config.noise_logistic,
     )
-    result.denoised_matrix = denoised
+    result.denoised_matrix = np.asarray(denoised).astype(result.cnv_matrix_fc.dtype, copy=False)
     return result
 
 
