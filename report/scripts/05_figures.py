@@ -149,7 +149,7 @@ axa.set_xlabel("inferCNV (R)")
 axa.set_ylabel("pyinfercnv")
 axa.set_title("Denoised CNV matrix")
 axa.set_aspect("equal")
-axa.text(0.96, 0.04, f"7 datasets\nmax |R - Python|\n{tab.maxdiff_22.max():.0e}", transform=axa.transAxes,
+axa.text(0.96, 0.04, f"7 datasets\nmax |R - Python|\n{tab.maxdiff_22.max():.1e}", transform=axa.transAxes,
          ha="right", va="bottom", fontsize=5, color=INK2)
 panel(axa, "a")
 
@@ -293,13 +293,14 @@ macros = {
     "nDatasets": len(tab), "nTenx": len(tenx), "nCellsTenxTotal": f"{int(tenx.cells.sum()):,}",
     "nCellsMin": f"{int(tenx.cells.min()):,}", "nCellsMax": f"{int(tenx.cells.max()):,}",
     "oligoCells": int(ol.cells), "oligoGenes": f"{int(ol.genes):,}", "oligoMal": len(mal),
-    "maxDiffExpr": f"{max(tab.maxdiff_14.max(), tab.maxdiff_22.max()):.0e}",
+    "maxDiffExpr": f"{max(tab.maxdiff_14.max(), tab.maxdiff_22.max()):.1e}",
     "agreeMin": f"{tenx.agree_17.min() * 100:.1f}", "agreeMax": f"{tenx.agree_17.max() * 100:.1f}",
     "ariMin": f"{tenx.ari.min():.2f}", "ariMax": f"{tenx.ari.max():.2f}",
     "speedMin": f"{speed.min():.0f}", "speedMax": f"{speed.max():.0f}",
     "tBigR": f"{big.sec_R:.0f}", "tBigPy": f"{big.sec_py:.0f}", "bigName": big.label,
     "oligoR": f"{ol.sec_R:.0f}", "oligoPy": f"{ol.sec_py:.1f}",
-    "oneP": f"{(oligo['R']['1p'] - 1) * 100:.1f}", "nineteenQ": f"{(oligo['R']['19q'] - 1) * 100:.1f}",
+    "oneP": f"{(1 - oligo['R']['1p']) * 100:.1f}", "nineteenQ": f"{(1 - oligo['R']['19q']) * 100:.1f}",
+    "nScatter": "4,000",
     "restGenome": f"{(oligo['R']['other'] - 1) * 100:.1f}",
 }
 with open(OUT / "numbers.tex", "w") as fh:
