@@ -269,11 +269,32 @@ def run_phase2(
     if reference_key is not None and reference_key in adata.obs.columns:
         group_labels = adata.obs[reference_key].to_numpy()
 
-    subclusters = _run_subclustering(
-        cnv_matrix, is_reference,
-        config=config, random_state=random_state, profile=profile,
-        group_labels=group_labels,
-    )
+    # R step 15 clusters the step-14 matrix (linear fold change), after leaving out the genes
+    # that are outliers in the reference (define_signif_tumor_subclusters z_score_filter).
+    subcluster_matrix = _subcluster_input(result_phase1, config, is_reference)
+    # One R generator for the whole run, as ``set.seed(random_state); infercnv::run(...)``: the
+    # hspike simulation (R step 3), the subclustering of the data and of the hspike (step 15)
+    # and the hspike trend (step 17) draw from it in R's order.
+    from pyinfercnv._rcompat.rng import RRandom
+    rr = RRandom(int(random_state))
+    if reference_key is not None and reference_key in adata.obs.columns:
+        ordered_groups = dict(_build_groups_from_obs(adata, is_reference, reference_key, reference_cat,
+                                                     select_ref=False))
+        ordered_groups.update(_build_groups_from_obs(adata, is_reference, reference_key, reference_cat,
+                                                     select_ref=True))
+    else:
+        ordered_groups = None
+
+    def _subcluster_data():
+        return _run_subclustering(
+            subcluster_matrix, is_reference,
+            config=config, random_state=random_state, profile=profile,
+            group_labels=group_labels, rng=rr, groups=ordered_groups,
+        )
+
+    subclusters = None
+    if config.HMM_type != "i6":
+        subclusters = _subcluster_data()
 
     # HMM branch
     hmm_type = config.HMM_type
@@ -311,20 +332,28 @@ def run_phase2(
 
         _t_hspike = time.perf_counter()
         _rss_hspike = _rss_mb()
+        sub_holder: dict[str, Any] = {}
+
+        def _step15(rng, hspike_linear, hs_ref, hs_obs):
+            # R step 15: the data's subclustering draws between the hspike simulation and the
+            # hspike trend (inferCNV 1.26 does not subcluster the hspike object itself).
+            sub_holder["main"] = _subcluster_data()
+
         cal = _calibrate_hmm_emission(
             result_phase1.cpm_matrix_f32, ref_groups_global,
             observation_groups=obs_groups_global,
-            config=config, random_state=random_state, profile=profile,
+            config=config, random_state=rr, profile=profile, before_trend=_step15,
         )
+        subclusters = sub_holder.get("main")
+        if subclusters is None:
+            subclusters = _subcluster_data()
         _profile_block(profile, "16_hspike_calibrate", _t_hspike, _rss_hspike)
 
         # Persist the calibration onto the Phase-2 result so Phase 3 BayesNet
         # (``_step18_bayesnet``) can auto-source it without re-running hspike.
         hspike_calibration = cal
 
-        cnv_matrix_linear_i6 = np.asarray(
-            result_phase1.cnv_matrix_fc, dtype=np.float64
-        )
+        cnv_matrix_linear_i6 = _linear_fc_f64(result_phase1, config)
         hmm_states_i6 = _run_hmm_by_subcluster(
             cnv_matrix_linear_i6, chr_pos, subclusters, is_reference,
             hmm_type="i6",
@@ -343,9 +372,7 @@ def run_phase2(
         # reference mu/sigma are re-estimated in that space.
         import pyinfercnv.hmm.i3 as _i3
         ref_idx = np.where(is_reference)[0]
-        cnv_matrix_linear = np.asarray(
-            result_phase1.cnv_matrix_fc, dtype=np.float64
-        )
+        cnv_matrix_linear = _linear_fc_f64(result_phase1, config)
         mus, sigs = _i3.estimate_i3_state_params(
             cnv_matrix_linear, ref_idx, config.HMM_i3_pval
         )
@@ -372,7 +399,7 @@ def run_phase2(
     rss0 = _rss_mb()
     cnv_regions = _build_cnv_regions(
         active_states, subclusters, chr_pos,
-        hmm_type=hmm_type,
+        hmm_type=hmm_type, is_reference=is_reference,
     )
     _profile_block(profile, "18_cnv_regions", t0, rss0)
 
@@ -386,6 +413,7 @@ def run_phase2(
         cnv_matrix_fc=result_phase1.cnv_matrix_fc,
         cell_meta=result_phase1.cell_meta,
         gene_values=result_phase1.gene_values,
+        gene_names=result_phase1.gene_names,
         ref_counts_raw=result_phase1.ref_counts_raw,
         cnv_matrix_f64=result_phase1.cnv_matrix_f64,
         cpm_matrix_f32=result_phase1.cpm_matrix_f32,
@@ -414,6 +442,8 @@ def _run_subclustering(
     random_state: int,
     profile: dict[str, Any] | None,
     group_labels: NDArray[np.object_] | None = None,
+    rng=None,
+    groups: "dict[str, NDArray[np.intp]] | None" = None,
 ) -> NDArray[np.int32]:
     """Run the configured subcluster backend, per-observation-group when
     ``config.cluster_by_groups`` is True and ``group_labels`` is supplied.
@@ -462,6 +492,25 @@ def _run_subclustering(
     cluster_by_groups = bool(getattr(config, "cluster_by_groups", True))
 
     def _partition(X: NDArray[np.float32]) -> NDArray[np.int32]:
+        if method == "leiden" and getattr(config, "leiden_method", "PCA") == "PCA":
+            from pyinfercnv.subcluster.leiden import leiden_subcluster_pca
+            return leiden_subcluster_pca(
+                X,
+                resolution=getattr(config, "leiden_resolution", "auto"),
+                k_nn=int(getattr(config, "k_nn", 20)),
+                objective_function=getattr(config, "leiden_function", "CPM"),
+                random_state=random_state,
+                rng=rng,
+            )
+        if method == "leiden" and rng is not None:
+            from pyinfercnv.subcluster.leiden import leiden_simple_r
+            return leiden_simple_r(
+                X,
+                resolution=getattr(config, "leiden_resolution", "auto"),
+                k_nn=int(getattr(config, "k_nn", 20)),
+                objective_function=getattr(config, "leiden_function", "CPM"),
+                rng=rng,
+            )
         if method == "leiden":
             from pyinfercnv.subcluster.leiden import leiden_subcluster
             return leiden_subcluster(
@@ -483,7 +532,23 @@ def _run_subclustering(
             f"('leiden', 'random_trees', 'qnorm'), got {method!r}"
         )
 
-    if group_labels is not None and cluster_by_groups:
+    if groups is not None and cluster_by_groups:
+        # R define_signif_tumor_subclusters(cluster_by_groups = TRUE): each group in R's order
+        # (observation groups sorted, then the reference groups), one generator throughout.
+        labels = np.full(n_cells, -1, dtype=np.int32)
+        next_id = 0
+        for g, member_idx in groups.items():
+            member_idx = np.asarray(member_idx, dtype=np.intp)
+            if member_idx.size == 0:
+                continue
+            local = np.asarray(_partition(cnv_matrix[member_idx]), dtype=np.int32)
+            uniq, inv = np.unique(local, return_inverse=True)
+            labels[member_idx] = next_id + inv.astype(np.int32)
+            next_id += uniq.size
+        uncovered = labels < 0
+        if uncovered.any():
+            labels[uncovered] = next_id
+    elif group_labels is not None and cluster_by_groups:
         # Per-group subclustering (R cluster_by_groups=TRUE).
         group_labels = np.asarray(group_labels)
         if group_labels.shape[0] != n_cells:
@@ -535,8 +600,9 @@ def _calibrate_hmm_emission(
     *,
     observation_groups: Mapping[str, NDArray[np.intp]] | None = None,
     config: "InferCNVConfig",
-    random_state: int,
+    random_state,
     profile: dict[str, Any] | None,
+    before_trend=None,
 ) -> "HspikeCalibration":
     """Thin wrapper over :func:`pyinfercnv.hmm.hspike.calibrate_i6_emission`.
 
@@ -555,8 +621,48 @@ def _calibrate_hmm_emission(
         aggregate_normals=False,
         random_state=random_state,
         profile=profile,
+        before_trend=before_trend,
     )
     return cal
+
+
+def _subcluster_input(result_phase1, config, is_reference) -> NDArray[np.float64]:
+    """The matrix R subclusters at step 15: linear fold change, without the genes whose mean
+    absolute z-score over the reference cells reaches ``config.z_score_filter``."""
+    return _z_filter(_linear_fc_f64(result_phase1, config), is_reference, config)
+
+
+def _z_filter(fc, is_reference, config) -> NDArray[np.float64]:
+    """Drop the genes whose mean |z| over the reference cells reaches ``config.z_score_filter``
+    (R define_signif_tumor_subclusters)."""
+    from pyinfercnv._rcompat.rbase import r_mean, r_sd
+    from pyinfercnv.hmm.hspike import _mean_r_cols
+    zf = float(getattr(config, "z_score_filter", 0.8))
+    if zf > 0 and is_reference.any():
+        ref = fc[is_reference]
+        flat = ref.ravel()                    # R's column-major order of the genes x cells matrix
+        z = np.abs((ref - r_mean(flat)) / r_sd(flat))
+        outlier = _mean_r_cols(z) >= zf
+        # R drops nothing-but-outliers via expr.data[-outliers, ]; with no outliers R's
+        # negative empty index would keep no genes, so all genes are kept here.
+        if outlier.any():
+            fc = fc[:, ~outlier]
+    return fc
+
+
+def _linear_fc_f64(result_phase1, config) -> NDArray[np.float64]:
+    """HMM input in float64, as R's: ``invert_log2`` of the float64 log-space matrix (and the
+    outlier bounds when ``prune_outliers``); the float32 ``cnv_matrix_fc`` otherwise."""
+    if result_phase1.cnv_matrix_f64 is None:
+        return np.asarray(result_phase1.cnv_matrix_fc, dtype=np.float64)
+    from pyinfercnv.preprocess import invert_log2
+    fc = invert_log2(np.asarray(result_phase1.cnv_matrix_f64, dtype=np.float64))
+    if config.prune_outliers:
+        from pyinfercnv.cna import prune_outliers
+        fc = prune_outliers(fc, method=config.outlier_method_bound,
+                            lower_bound=config.outlier_lower_bound,
+                            upper_bound=config.outlier_upper_bound)
+    return fc
 
 
 def _build_groups_from_obs(
@@ -590,10 +696,13 @@ def _build_groups_from_obs(
     )
     labels = adata.obs[reference_key].to_numpy()
     all_cats = list(dict.fromkeys(labels.tolist()))
+    # R CreateInfercnvObject: reference groups in the order of ref_group_names, observation
+    # groups sorted by name.
+    present = set(all_cats)
     cats_wanted = (
-        [c for c in all_cats if c in set(ref_cats)]
+        [c for c in ref_cats if c in present]
         if select_ref
-        else [c for c in all_cats if c not in set(ref_cats)]
+        else sorted((c for c in all_cats if c not in set(ref_cats)), key=str)
     )
     groups: dict[str, NDArray[np.intp]] = {}
     for c in cats_wanted:
@@ -725,8 +834,12 @@ def _build_cnv_regions(
     *,
     hmm_type: str,
     cell_group_meta: pd.DataFrame | None = None,
+    is_reference: NDArray[np.bool_] | None = None,
 ) -> pd.DataFrame:
     """Run-length-encode non-neutral HMM state segments into a long DataFrame.
+
+    As R's CNV region predictions (the input of the Bayesian network), only observation
+    subclusters are reported; subclusters of reference cells are skipped.
 
     One row per run-length within a ``(subcluster, chromosome)`` cell; runs
     of the neutral state are skipped. Output columns (R maps loosely to
@@ -768,6 +881,8 @@ def _build_cnv_regions(
 
     for sc in tumor_subclusters:
         members = np.where(subclusters == sc)[0]
+        if is_reference is not None and np.all(is_reference[members]):
+            continue
         cell_group = f"subcluster_{sc}"
 
         # All cells in same subcluster share the same HMM trace — pick first member

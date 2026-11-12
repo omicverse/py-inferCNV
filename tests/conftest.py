@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os as _os
+
+# R infercnv's extdata (the oligodendroglioma fixture); override with PYINFERCNV_R_EXTDATA
+R_EXTDATA = Path(_os.environ.get("PYINFERCNV_R_EXTDATA", "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata"))
 
 import numpy as np
 import pytest
@@ -11,18 +15,9 @@ from scipy import sparse as sp
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 R_OUT_DIR = REPO_ROOT / "tests" / "r_out"
-R_FIXTURE_COUNTS = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "oligodendroglioma_expression_downsampled.counts.matrix.gz"
-)
-R_FIXTURE_ANNOT = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "oligodendroglioma_annotations_downsampled.txt"
-)
-R_FIXTURE_GENE_ORDER = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
-)
+R_FIXTURE_COUNTS = R_EXTDATA / "oligodendroglioma_expression_downsampled.counts.matrix.gz"
+R_FIXTURE_ANNOT = R_EXTDATA / "oligodendroglioma_annotations_downsampled.txt"
+R_FIXTURE_GENE_ORDER = R_EXTDATA / "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
 
 
 @pytest.fixture

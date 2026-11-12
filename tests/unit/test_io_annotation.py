@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os as _os
+
+# R infercnv's extdata (the oligodendroglioma fixture); override with PYINFERCNV_R_EXTDATA
+R_EXTDATA = Path(_os.environ.get("PYINFERCNV_R_EXTDATA", "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata"))
 
 import pytest
 
 from pyinfercnv.io.annotation import read_gene_order_file
 
 
-R_GENE_ORDER = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
-)
+R_GENE_ORDER = R_EXTDATA / "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
 
 
 def test_read_synthetic(tmp_path):

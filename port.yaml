@@ -11,21 +11,21 @@ domain: single-cell   # single-cell | spatial | trajectory | bulk | proteomics |
 upstream:
   name: "infercnv"
   source: "Bioconductor"   # CRAN | Bioconductor | GitHub | other
-  version: null   # TODO: upstream version the parity test was run against
+  version: "1.26.0"
   url: "https://github.com/broadinstitute/inferCNV"
-  license: null   # TODO: upstream R package license (GPL-3, MIT, Artistic-2.0, …)
-  citation: null   # TODO: "First author et al. (Year) Journal"
+  license: "BSD-3-Clause"
+  citation: "Tickle T, Tirosh I, Georgescu C, Brown M, Haas B. inferCNV of the Trinity CTAT Project. Klarman Cell Observatory, Broad Institute (2019). https://github.com/broadinstitute/inferCNV"
 omicverse:
-  module: null   # TODO: e.g. ov.single.pyDoubletFinder, or leave null
+  module: null
   since: null
 parity:
-  status: unverified   # pass | partial | unverified
-  algorithm_class: null   # TODO: see omicverse-rebuildr/PARITY_TAXONOMY.md
-  metric: null   # TODO: pearson | spearman | ari | jaccard | max_abs_diff | …
-  threshold: null
-  value: null   # TODO: measured value on the canonical fixture
-  fixture: null
-  test: null
+  status: pass   # R RNG + smooth.spline + Seurat/igraph subclustering ported; same seed -> R's result
+  algorithm_class: stochastic-seeded
+  metric: expression max_abs_diff; HMM state agreement; subcluster ARI
+  threshold: "expression < 1e-6; oligodendroglioma HMM/subclusters identical"
+  value: "oligodendroglioma: identical HMM states and subclusters; 6 10x tumours: expression 1e-7, HMM 98.2-99.5%, ARI 0.79-0.98 (R's Annoy neighbours)"
+  fixture: "inferCNV oligodendroglioma example; GSE148673 DCIS1, TNBC1-5"
+  test: "tests/test_r_parity.py (R reference via tests/r_reference.R); tests/unit/test_rcompat.py (stored R values)"
 artifacts:
   audit: null
   report: null

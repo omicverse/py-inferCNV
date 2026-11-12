@@ -1,5 +1,10 @@
 # NAMESPACE_PARITY — R infercnv → pyinfercnv
 
+> **0.2.1 update.** The tables below record the 0.2.0 audit. Since 0.2.1, pyinfercnv draws R's
+> random numbers in R's order and ports `smooth.spline` (GCV) and Seurat's PCA/SNN subclustering;
+> with the same seed the oligodendroglioma fixture gives R's subclusters and HMM states exactly
+> (`tests/test_r_parity.py`, Jaccard 1.000). See the README section *Reproducing R* and `report/`.
+
 Per `docs/superpowers/specs/2026-04-21-pyinfercnv-master-design.md` §3.3 + §5.2.
 
 Tier meanings (spec §5.1):

@@ -12,6 +12,10 @@ machines without R installed.
 from __future__ import annotations
 
 from pathlib import Path
+import os as _os
+
+# R infercnv's extdata (the oligodendroglioma fixture); override with PYINFERCNV_R_EXTDATA
+R_EXTDATA = Path(_os.environ.get("PYINFERCNV_R_EXTDATA", "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata"))
 
 import numpy as np
 import pandas as pd
@@ -32,18 +36,9 @@ from pyinfercnv.validation.r_parity import bit_exact_assert, max_abs_diff
 REPO_ROOT = Path(__file__).resolve().parent.parent
 R_OUT_DIR = REPO_ROOT / "tests" / "r_out"
 
-R_FIXTURE = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "oligodendroglioma_expression_downsampled.counts.matrix.gz"
-)
-R_ANNOT = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "oligodendroglioma_annotations_downsampled.txt"
-)
-R_GENE_ORDER = Path(
-    "/media/jason/T7/rerbulid/infercnv/infercnv-master/inst/extdata/"
-    "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
-)
+R_FIXTURE = R_EXTDATA / "oligodendroglioma_expression_downsampled.counts.matrix.gz"
+R_ANNOT = R_EXTDATA / "oligodendroglioma_annotations_downsampled.txt"
+R_GENE_ORDER = R_EXTDATA / "gencode_downsampled.EXAMPLE_ONLY_DONT_REUSE.txt"
 
 
 def _r_step_available(name: str) -> bool:
@@ -401,7 +396,7 @@ def _build_adata_from_fixture(raw_counts_df: "pd.DataFrame",
     common = [g for g in go.index if g in raw_counts_df.index]
     counts_sub = raw_counts_df.loc[common]  # genes x cells
 
-    X = counts_sub.T.to_numpy(dtype=np.float32)  # cells x genes
+    X = counts_sub.T.to_numpy(dtype=np.float64)  # cells x genes (R doubles; counts are not integers)
     obs = pd.DataFrame(index=counts_sub.columns)
     obs["celltype"] = obs.index.map(dict(zip(annot_df["cell_id"], annot_df["annotation"])))
 
@@ -422,7 +417,11 @@ _REF_PATTERNS = ("malignant_", "Tumor_", "tumor_", "Observation", "observation")
 
 
 def _ref_cats_from_adata(adata: "AnnData") -> list[str]:
-    all_labels = adata.obs["celltype"].unique().tolist()
+    # R's r_reference.R takes the reference groups in the annotation file's order
+    if R_ANNOT.exists():
+        all_labels = pd.read_csv(R_ANNOT, sep="\t", header=None)[1].unique().tolist()
+    else:
+        all_labels = adata.obs["celltype"].unique().tolist()
     return [a for a in all_labels if not any(p in a for p in _REF_PATTERNS)]
 
 
@@ -510,7 +509,7 @@ def test_step15_subclusters_ari_floor(raw_counts_all, annotations, gene_order):
         adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
         ref_cats = _ref_cats_from_adata(adata)
 
-        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6")
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6", leiden_method="simple")
         result = infercnv(
             adata,
             config=cfg,
@@ -569,7 +568,7 @@ def test_step17_hmm_i6_jaccard_floor(raw_counts_all, annotations, gene_order):
         adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
         ref_cats = _ref_cats_from_adata(adata)
 
-        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6")
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i6", leiden_method="simple")
         result = infercnv(
             adata,
             config=cfg,
@@ -661,7 +660,7 @@ def test_step17_hmm_i3_jaccard_floor(raw_counts_all, annotations, gene_order):
         adata = _build_adata_from_fixture(raw_counts_all, annotations, gene_order)
         ref_cats = _ref_cats_from_adata(adata)
 
-        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i3")
+        cfg = InferCNVConfig(cutoff=1, HMM=True, HMM_type="i3", leiden_method="simple")
         result = infercnv(
             adata,
             config=cfg,
@@ -782,7 +781,7 @@ def _build_bayesnet_inputs(raw_counts_all, annotations, gene_order):
     # _step18_bayesnet now raises NotImplementedError when reassignCNVs=True.
     cfg = InferCNVConfig(
         cutoff=1, HMM=True, HMM_type="i6", BayesMaxPNormal=0.5,
-        reassignCNVs=False, random_state=42,
+        reassignCNVs=False, random_state=42, leiden_method="simple",
     )
 
     cfg_p1 = InferCNVConfig(
@@ -816,11 +815,14 @@ def _build_bayesnet_inputs(raw_counts_all, annotations, gene_order):
         lab: cell_idx_all[(celltypes == lab) & ~is_ref]
         for lab in np.unique(celltypes[~is_ref])
     }
-    cal = calibrate_i6_emission(
-        result_p1.cpm_matrix_f32, ref_groups_global,
-        observation_groups=obs_groups_global,
-        config=cfg, random_state=cfg.random_state,
-    )
+    # the calibration Phase 2 used (R order of random draws: hspike, subclustering, trend)
+    cal = result_p2.hspike_calibration
+    if cal is None:
+        cal = calibrate_i6_emission(
+            result_p1.cpm_matrix_f32, ref_groups_global,
+            observation_groups=obs_groups_global,
+            config=cfg, random_state=cfg.random_state,
+        )
     return adata, cfg, result_p2, cal
 
 

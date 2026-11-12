@@ -90,6 +90,8 @@ class InferCNVResult:
     cnv_matrix_fc: np.ndarray
     cell_meta: pd.DataFrame
     gene_values: np.ndarray | None = None
+    # Gene (column) names of the CNV matrices, in genomic order.
+    gene_names: np.ndarray | None = None
 
     # G1 P2
     ref_counts_raw: np.ndarray | None = None
@@ -206,6 +208,8 @@ class InferCNVResult:
         adata.obsm[f"X_{key_added}"] = self.cnv_matrix
 
         uns_entry: dict[str, Any] = {"chr_pos": self.chr_pos}
+        if self.gene_names is not None:
+            uns_entry["genes"] = np.asarray(self.gene_names, dtype=object)
         if self.cnv_regions is not None:
             uns_entry["cnv_regions"] = self.cnv_regions
         if self.posterior_p_normal is not None:

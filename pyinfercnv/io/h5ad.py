@@ -4,7 +4,8 @@ Contract (spec section 6.1):
     - Default `counts_layer="counts"`: read adata.layers["counts"]; raise if missing.
     - `counts_layer=None`: use adata.X; warn if it doesn't look like counts.
     - `counts_layer="<other>"`: read named layer.
-    - Always return CSR float32.
+    - Always return CSR float64 (R keeps counts as doubles; float32 would round
+      non-integer expression values, e.g. Smart-seq2 estimates).
 """
 from __future__ import annotations
 
@@ -36,15 +37,16 @@ def _looks_like_counts(x) -> bool:
 
 
 def _to_csr_float32(x) -> sp.csr_matrix:
+    """CSR float64 (name kept for compatibility)."""
     if sp.issparse(x):
-        if x.dtype != np.float32:
-            x = x.astype(np.float32)
+        if x.dtype != np.float64:
+            x = x.astype(np.float64)
         return x.tocsr()
-    return sp.csr_matrix(np.asarray(x, dtype=np.float32))
+    return sp.csr_matrix(np.asarray(x, dtype=np.float64))
 
 
 def extract_counts(adata: "AnnData", *, counts_layer: str | None = "counts") -> sp.csr_matrix:
-    """Return CSR float32 counts matrix (cells x genes) per contract."""
+    """Return the CSR float64 counts matrix (cells x genes)."""
     if counts_layer is None:
         X = adata.X
         if not _looks_like_counts(X):

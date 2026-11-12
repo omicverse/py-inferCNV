@@ -38,10 +38,14 @@ def normalize_by_seq_depth(X, *, normalize_factor: float | None = None):
     if normalize_factor is None:
         normalize_factor = float(np.median(libsizes))
 
+    # R: sweep(data, 2, colSums, "/") * normalize_factor -- divide first,
+    # then multiply, so the rounding matches R's.
     with np.errstate(divide="ignore", invalid="ignore"):
-        scale = np.where(libsizes > 0, normalize_factor / libsizes, 0.0)
+        inv = np.where(libsizes > 0, libsizes, np.inf)
 
     if sp.issparse(Xc):
-        diag = sp.diags(scale)
-        return (diag @ Xc).tocsr()
-    return Xc * scale[:, None]
+        out = Xc.copy()
+        rows = np.repeat(np.arange(out.shape[0]), np.diff(out.indptr))
+        out.data = (out.data / inv[rows]) * normalize_factor
+        return out
+    return (Xc / inv[:, None]) * normalize_factor
