@@ -64,6 +64,60 @@ pyinfercnv run-h5ad --input dataset.h5ad --output out.h5ad \
     --reference-key cell_type --reference-cat Microglia,Oligodendrocytes
 ```
 
+## Parallel random-tree permutations
+
+`InferCNVConfig.tree_workers` sets the number of worker processes used for
+independent random-tree null permutations. The default is `1` (serial).
+The pipeline forwards this setting to `random_tree_subcluster`; callers of
+that function can pass `tree_workers` directly.
+
+```python
+from anndata import read_h5ad
+from pyinfercnv import InferCNVConfig, infercnv
+
+
+def main():
+    adata = read_h5ad("dataset.h5ad")
+    config = InferCNVConfig(
+        HMM=True,
+        tumor_subcluster_partition_method="random_trees",
+        tree_workers=4,
+    )
+    infercnv(adata, config=config,
+             reference_key="cell_type", reference_cat="normal")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Workers use the `spawn` start method, so run parallel calls from an
+importable script with the `__main__` guard. One pool is reused through
+recursive partitions. The matrix is shared once per null fit using Python
+shared memory; each worker still allocates its own permutation, smoothing
+and distance workspaces. Choose the worker count for the available RAM and
+CPU budget. To limit nested thread pools, set `OPENBLAS_NUM_THREADS=1`,
+`OMP_NUM_THREADS=1` and `NUMBA_NUM_THREADS=1` before starting Python.
+
+Each task receives a snapshot of the serial PCG64 stream. The parent advances
+by the same float64 draws and preserves any cached uint32 value. Results are
+collected in permutation order, preserving linkage, null p-values, recursive
+labels and subsequent RNG draws for identical inputs and seeds. Shared memory
+is closed and unlinked on success or failure.
+
+The existing smoother, 500-cell default subsampling cap and HMM calibration
+remain the upstream implementation in this change. R-parity corrections are
+reviewed separately. Process startup can dominate small inputs; speedup is
+workload- and memory-dependent.
+
+Portable regression tests cover float32/float64, cached uint32 state, two and
+three workers, recursive/subsampled trees, config forwarding and failure
+cleanup:
+
+```bash
+python -m pytest tests/unit/test_random_trees_parallel.py
+```
+
 ## Parity status (Phase 1)
 
 R-parity verified against R `infercnv` pipeline's per-step intermediate TSV dumps

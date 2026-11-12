@@ -474,7 +474,9 @@ def _run_subclustering(
             )
         if method == "random_trees":
             from pyinfercnv.subcluster.random_trees import random_tree_subcluster
-            return random_tree_subcluster(X, random_state=random_state)
+            return random_tree_subcluster(
+                X, random_state=random_state, tree_workers=config.tree_workers,
+            )
         if method == "qnorm":
             from pyinfercnv.subcluster.qnorm import qnorm_subcluster
             return qnorm_subcluster(X)
